@@ -1,0 +1,18 @@
+# golangci-lint v2 configuration — https://golangci-lint.run
+# Default linter set (errcheck, govet, ineffassign, staticcheck, unused) with a
+# couple of conventional, low-value-noise exclusions.
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    generated: lax
+    presets:
+      # Idiomatic skips: unchecked Close/Flush/print/Remove/Setenv returns.
+      - std-error-handling
+    rules:
+      # Test setup helpers (MkdirAll/WriteFile/Exec/Set) intentionally elide
+      # error checks to keep fixtures readable.
+      - path: _test\.go
+        linters:
+          - errcheck

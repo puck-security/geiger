@@ -1,0 +1,39 @@
+# ─── Build output ──────────────────────────────────────────────
+# `go build -o geiger ./cmd/geiger` drops the binary at the repo root.
+/geiger
+/geiger.exe
+
+# GoReleaser staging directory
+/dist/
+
+# ─── Test / coverage artifacts ─────────────────────────────────
+*.test
+/coverage.out
+/coverage.html
+/coverage.txt
+
+# ─── Go tooling ────────────────────────────────────────────────
+go.work
+go.work.sum
+
+# ─── Local credential scratch (repo root only) ─────────────────
+# geiger triages REAL secrets — keep sample inputs out of version control.
+# Anchored to the root so committed fixtures under testdata/ are unaffected.
+/.env
+/.env.*
+/*.env
+/sso-cache.json
+/gitleaks-report.json
+/trufflehog.json
+/leaked-repo/
+
+# ─── Editors & OS cruft ────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.direnv/
+.claude/

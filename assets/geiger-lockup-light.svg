@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="312" height="146" viewBox="0 0 312 146" role="img">
+  <title>geiger lockup (light)</title>
+  <desc>The geiger mark beside the wordmark in near-black, for light backgrounds.</desc>
+  <g transform="translate(48 70) rotate(-16)">
+    <path d="M24 -24 A34 34 0 0 1 24 24" fill="none" stroke="#f5b301" stroke-width="5" stroke-linecap="round"/>
+    <path d="M32.5 -32.5 A46 46 0 0 1 32.5 32.5" fill="none" stroke="#f5b301" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+    <path d="M41 -41 A58 58 0 0 1 41 41" fill="none" stroke="#f5b301" stroke-width="3" stroke-linecap="round" opacity="0.3"/>
+    <rect x="-4" y="24" width="8" height="34" fill="#f5b301"/>
+    <rect x="4" y="42" width="11" height="5" fill="#f5b301"/>
+    <rect x="4" y="51" width="7" height="6" fill="#f5b301"/>
+    <path fill="#f5b301" fill-rule="evenodd" d="M-24 0 A24 24 0 1 0 24 0 A24 24 0 1 0 -24 0 Z M-3 -5.2 L-9 -15.6 A18 18 0 0 1 9 -15.6 L3 -5.2 A6 6 0 0 0 -3 -5.2 Z M6 0 L18 0 A18 18 0 0 1 9 15.6 L3 5.2 A6 6 0 0 0 6 0 Z M-3 5.2 L-9 15.6 A18 18 0 0 1 -18 0 L-6 0 A6 6 0 0 0 -3 5.2 Z M4 0 A4 4 0 1 0 -4 0 A4 4 0 1 0 4 0 Z"/>
+  </g>
+  <text x="142" y="84" fill="#15171c" font-size="40" font-family="ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace">geiger</text>
+</svg>

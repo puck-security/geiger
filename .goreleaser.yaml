@@ -1,0 +1,83 @@
+# GoReleaser config — https://goreleaser.com
+# Build & validate locally with:  goreleaser release --snapshot --clean
+# Cross-compiles cleanly because every dependency is pure Go (CGO disabled).
+version: 2
+
+project_name: geiger
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: geiger
+    main: ./cmd/geiger
+    binary: geiger
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+      - "386"
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      # Apple silicon/Intel only on macOS.
+      - goos: darwin
+        goarch: "386"
+      - goos: darwin
+        goarch: arm
+      # 32-bit ARM isn't a meaningful Windows/FreeBSD target here.
+      - goos: windows
+        goarch: arm
+      - goos: freebsd
+        goarch: arm
+      # modernc.org/libc (the sqlite backend) has no freebsd/386 port.
+      - goos: freebsd
+        goarch: "386"
+
+archives:
+  - id: geiger
+    # Matches the geiger_<version>_<os>_<arch>.tar.gz names in the README.
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}'
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  draft: false
+  prerelease: auto

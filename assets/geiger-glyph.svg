@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img">
+  <title>geiger glyph</title>
+  <desc>Simplified small-size glyph: an amber tile with a bold radiation trefoil knocked out, for favicons and app icons.</desc>
+  <mask id="trefoil">
+    <rect x="0" y="0" width="64" height="64" rx="14" fill="#fff"/>
+    <g fill="#000">
+      <path d="M28 25.07 L22 14.68 A20 20 0 0 1 42 14.68 L36 25.07 A8 8 0 0 0 28 25.07 Z"/>
+      <path d="M28 25.07 L22 14.68 A20 20 0 0 1 42 14.68 L36 25.07 A8 8 0 0 0 28 25.07 Z" transform="rotate(120 32 32)"/>
+      <path d="M28 25.07 L22 14.68 A20 20 0 0 1 42 14.68 L36 25.07 A8 8 0 0 0 28 25.07 Z" transform="rotate(240 32 32)"/>
+      <circle cx="32" cy="32" r="6"/>
+    </g>
+  </mask>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="#f5b301" mask="url(#trefoil)"/>
+</svg>
