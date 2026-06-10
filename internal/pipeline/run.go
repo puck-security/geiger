@@ -423,7 +423,7 @@ func runOne(b parse.Blob, reg *module.Registry, opts Options, m recognize.Match)
 				if n := len(got); n > 0 {
 					res.Note.Findings = append(res.Note.Findings, module.Finding{
 						Key:   "harvested",
-						Value: itoa(n) + " downstream secret(s) extracted and triaged below",
+						Value: itoa(n) + ` downstream secret(s) extracted — re-triaged as separate "harvested via ` + m.Module + `" findings`,
 						Flag:  module.FlagForceMultiplier,
 					})
 				}

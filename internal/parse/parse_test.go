@@ -2,6 +2,23 @@ package parse
 
 import "testing"
 
+func TestParseBinarySkipsKV(t *testing.T) {
+	// A binary blob (e.g. Firefox's data.safe.bin cert store) that happens to hold
+	// bytes resembling SECRET_KEY=value must not be split into "variables" — that's
+	// what made the name-based recognizers flag cert strings as credentials.
+	raw := "\x00\x01\x02BEIJING CERTIFICATE AUTHORITY\x00API_SECRET=AKIAIOSFODNN7EXAMPLE\x00\xff\xfe"
+	b := Parse(raw, "security_state/data.safe.bin")
+	if len(b.Vars) != 0 {
+		t.Errorf("binary content must not be KV-parsed, got Vars %v", b.Vars)
+	}
+	if b.JSON != nil || b.INI != nil {
+		t.Errorf("binary content must not be JSON/INI-parsed")
+	}
+	if b.Raw != raw {
+		t.Errorf("Raw should be preserved for gitleaks shape scanning")
+	}
+}
+
 func TestParseDotenv(t *testing.T) {
 	b := Parse("export GITHUB_TOKEN=ghp_abc\n# comment\nAWS_REGION=us-east-1\n", ".env")
 	if b.Vars["GITHUB_TOKEN"] != "ghp_abc" {

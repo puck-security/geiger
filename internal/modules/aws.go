@@ -67,6 +67,11 @@ func (m awsKey) Recon(ctx context.Context, c *recon.Client, _ module.Token, f mo
 		return out, nil
 	}
 
+	// Findings beyond this point characterize reach. Remember the floor so we can
+	// state explicitly when every read-only probe came back empty — a key that
+	// only proves its identity should read as "scope not surfaced", not as "safe".
+	base := len(out)
+
 	// 2. account alias (prod tell) — iam:ListAccountAliases.
 	if alias := m.iamAlias(ctx, c, f); alias != "" {
 		flag := module.FlagInfo
@@ -99,6 +104,17 @@ func (m awsKey) Recon(ctx context.Context, c *recon.Client, _ module.Token, f mo
 	// 5. privesc edges — iam:SimulatePrincipalPolicy (read-only).
 	if callerARN != "" {
 		out = append(out, m.privesc(ctx, c, f, callerARN)...)
+	}
+
+	// Make the negative space legible: a valid key whose every reach probe was
+	// denied or empty otherwise renders as a bare identity, which reads as "narrow
+	// and safe" when geiger simply found no access it could prove read-only.
+	if callerARN != "" && len(out) == base {
+		out = append(out, module.Finding{
+			Key:   "reach",
+			Value: "identity only — read-only probes (IAM alias, S3, Secrets Manager, privesc) surfaced no further access",
+			Flag:  module.FlagInfo,
+		})
 	}
 	return out, nil
 }

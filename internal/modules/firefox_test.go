@@ -180,17 +180,32 @@ func TestFirefoxModuleReconAndHarvest(t *testing.T) {
 		t.Errorf("without --intrusive the store must be gated: %+v", fs)
 	}
 
-	// intrusive → decrypts + force-multiplier
+	// intrusive → decrypts + force-multiplier, with the recovered site inventoried.
 	c := recon.New(nil, true)
 	c.SetIntrusive(true)
 	fs2, _ := mod.Recon(context.Background(), c, module.Token{}, fields)
-	if indexByKey(fs2)["recovered"].Flag != module.FlagForceMultiplier {
+	rec := indexByKey(fs2)["recovered"]
+	if rec.Flag != module.FlagForceMultiplier {
 		t.Errorf("intrusive recon should recover logins as a force multiplier: %+v", fs2)
 	}
+	if len(rec.Detail) != 1 || rec.Detail[0] != "corp.example" {
+		t.Errorf("recovered finding should inventory the site, got Detail %v", rec.Detail)
+	}
+
+	// A web password is the loot itself — inventoried above, NOT fed back through
+	// recon (where it would surface as unplaceable generic_secret noise).
 	h := mod.(module.Harvester)
 	got, _ := h.Harvest(context.Background(), c, module.Token{}, fields)
-	if len(got) != 1 || got[0].Value != "Tr0ub4dour" {
-		t.Errorf("harvest should recover the plaintext password: %+v", got)
+	if len(got) != 0 {
+		t.Errorf("a web password must not be harvested for re-triage: %+v", got)
+	}
+
+	// A saved value that IS a real provider token gets harvested and re-triaged.
+	dir2 := t.TempDir()
+	tokenPath := buildFirefoxProfile(t, dir2, "https://github.example", "bot", "ghp_0123456789abcdefghij0123456789abcd")
+	tok, _ := h.Harvest(context.Background(), c, module.Token{}, module.Fields{"source": tokenPath, "count": "1"})
+	if len(tok) != 1 || tok[0].Value != "ghp_0123456789abcdefghij0123456789abcd" {
+		t.Errorf("a token-shaped saved value should be harvested: %+v", tok)
 	}
 }
 

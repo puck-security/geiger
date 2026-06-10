@@ -46,6 +46,16 @@ func Parse(raw, fileHint string) Blob {
 		return b
 	}
 
+	// Binary content (cert/revocation stores like Firefox's data.safe.bin, .bin
+	// blobs, anything that slipped the walker's extension filter): a NUL byte means
+	// it isn't text. Don't KV/JSON/INI-parse it — that turns binary noise into
+	// bogus "variables" that the name-based recognizers (generic_secret, env-name)
+	// then flag as credentials. Keep Raw so the precise, checksum-anchored gitleaks
+	// rules can still scan it; they don't false-positive on cert strings.
+	if strings.IndexByte(raw, 0) >= 0 {
+		return b
+	}
+
 	// JSON object (SA key, SSO cache, docker config, ADC).
 	if strings.HasPrefix(trimmed, "{") {
 		var obj map[string]any

