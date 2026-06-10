@@ -21,19 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # A representative subset (3 OSes, amd64 + arm64) for fast push/PR feedback —
+      # enough to catch OS/arch-specific compile breakage. Release day cross-compiles
+      # every target via goreleaser, so full platform coverage isn't lost.
       matrix:
         include:
           - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: linux, goarch: arm, goarm: "7" }
-          - { goos: linux, goarch: "386" }
-          - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
           - { goos: windows, goarch: amd64 }
-          - { goos: windows, goarch: arm64 }
-          - { goos: windows, goarch: "386" }
-          - { goos: freebsd, goarch: amd64 }
-          - { goos: freebsd, goarch: arm64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
