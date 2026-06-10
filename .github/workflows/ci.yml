@@ -13,57 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test & vet
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      - name: go.mod is tidy
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-      - name: gofmt
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "::error::These files are not gofmt-formatted:"
-            echo "$unformatted"
-            exit 1
-          fi
-      - name: go vet
-        run: go vet ./...
-      - name: Test (race + coverage)
-        run: go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: coverage.out
-          if-no-files-found: ignore
-
-  lint:
-    name: golangci-lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.12.2
-
-  govulncheck:
-    name: govulncheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: golang/govulncheck-action@v1
-        with:
-          go-version-file: go.mod
+  checks:
+    uses: ./.github/workflows/checks.yml
 
   build:
     name: Cross-compile

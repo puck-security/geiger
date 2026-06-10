@@ -2,6 +2,8 @@ module github.com/puck-security/geiger
 
 go 1.25.0
 
+toolchain go1.25.11
+
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -95,7 +97,7 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/therootcompany/xz v1.0.1 // indirect
-	github.com/ulikunitz/xz v0.5.12 // indirect
+	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/wasilibs/go-re2 v1.9.0 // indirect
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect

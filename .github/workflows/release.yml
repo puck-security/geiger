@@ -8,9 +8,17 @@ permissions:
   contents: write
 
 jobs:
+  # Heavy goreleaser builds only run on a clean version rev: the full check gate
+  # (tidy + gofmt + vet + race tests, lint, govulncheck) must pass first.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   goreleaser:
     name: GoReleaser
+    needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
