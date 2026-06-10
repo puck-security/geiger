@@ -32,9 +32,9 @@ var version = "dev"
 type config struct {
 	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet bool
 	endpoint, proxy, fromGitleaks, fromTrufflehog, contextTerms, colorMode, only, skip      string
-	userAgent                                                                               string
+	userAgent, minSeverity, output                                                          string
 	timeout                                                                                 time.Duration
-	concurrency                                                                             int
+	concurrency, minSevRank                                                                 int
 	args                                                                                    []string
 }
 
@@ -62,6 +62,9 @@ func main() {
 	flag.StringVar(&c.userAgent, "user-agent", "", "User-Agent for recon calls (default geiger/<version>)")
 	flag.DurationVar(&c.timeout, "timeout", 15*time.Second, "per-credential recon timeout (e.g. 5s, 30s)")
 	flag.IntVar(&c.concurrency, "concurrency", 8, "max credentials reconned at once on the --live path")
+	flag.StringVar(&c.minSeverity, "min-severity", "", "only print findings at or above this tier: critical|high|medium|low|info|dead")
+	flag.StringVar(&c.output, "o", "", "write results to FILE instead of stdout (0600, color off; status stays on stderr)")
+	flag.StringVar(&c.output, "output", "", "alias for -o")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -81,6 +84,35 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 	color.Enabled = wantColor(c.colorMode, c.asJSON)
 	ctx := score.Context{Terms: splitCSV(c.contextTerms)}
 	st := &status{w: stderr, on: statusOn}
+
+	// --min-severity threshold (zero rank = DEAD = show everything).
+	if c.minSeverity != "" {
+		t, ok := score.ParseTier(c.minSeverity)
+		if !ok {
+			fmt.Fprintf(stderr, "geiger: invalid --min-severity %q (want critical|high|medium|low|info|dead)\n", c.minSeverity)
+			return 2
+		}
+		c.minSevRank = score.Rank(t)
+	}
+
+	// -o/--output: save the result stream to a file (0600 — output carries
+	// sensitive paths/identities even though secrets are redacted). Status/header
+	// stay on stderr; color is forced off so a saved artifact isn't full of
+	// escape codes.
+	out := stdout
+	if c.output != "" {
+		f, err := os.OpenFile(c.output, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			fmt.Fprintln(stderr, "geiger:", err)
+			return 2
+		}
+		defer f.Close()
+		out = f
+		color.Enabled = false // a saved artifact should never contain ANSI codes
+		if !c.quiet {
+			defer fmt.Fprintf(stderr, "geiger: results written to %s\n", c.output)
+		}
+	}
 
 	// Identify recon traffic as geiger/<version> by default (overridable). Honest
 	// attribution over Go's anonymous default UA.
@@ -112,14 +144,19 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 	opts := pipeline.Options{
 		Live: c.live, Intrusive: c.intrusive, MinFootprint: c.minFootprint,
 		Endpoint: c.endpoint, Proxy: c.proxy, Correlate: c.correlate, Trace: c.trace,
-		Timeout: c.timeout, Concurrency: c.concurrency,
+		Timeout: c.timeout, Concurrency: c.concurrency, StartedAt: time.Now(),
 		Select: c.selector(),
 	}
 
 	if c.stream {
-		return runStream(stdout, stderr, sources, opts, ctx, c)
+		return runStream(out, stderr, sources, opts, ctx, c)
 	}
-	return runSorted(stdout, stderr, st, sources, opts, ctx, c)
+	return runSorted(out, stderr, st, sources, opts, ctx, c)
+}
+
+// showResult reports whether a result clears the --min-severity threshold.
+func (c config) showResult(r pipeline.Result, ctx score.Context) bool {
+	return score.Rank(score.TierFor(r.Note, ctx)) >= c.minSevRank
 }
 
 // runSorted is the default: triage every source, then sort by blast radius so
@@ -138,11 +175,16 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		return 0
 	}
 	pipeline.SortBySeverity(results, ctx)
-	for i, r := range results {
-		printResult(stdout, r, ctx, c, i > 0)
+	printed := 0
+	for _, r := range results {
+		if !c.showResult(r, ctx) {
+			continue
+		}
+		printResult(stdout, r, ctx, c, printed > 0)
+		printed++
 	}
-	if !c.asJSON && len(results) > 1 {
-		printSummary(stdout, results, ctx)
+	if !c.asJSON && (len(results) > 1 || c.minSevRank > 0) {
+		printSummary(stdout, results, ctx, c)
 	}
 	printIntrusiveHint(stderr, results, c)
 	return 0
@@ -157,6 +199,9 @@ func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipelin
 	bt := pipeline.NewBatch(gmodule.Default, opts)
 	printed := 0
 	all := bt.RunConcurrent(sources, func(r pipeline.Result) {
+		if !c.showResult(r, ctx) {
+			return
+		}
 		printResult(stdout, r, ctx, c, printed > 0)
 		printed++
 	}, nil)
@@ -166,8 +211,8 @@ func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipelin
 		}
 		return 0
 	}
-	if !c.asJSON && len(all) > 1 {
-		printSummary(stdout, all, ctx)
+	if !c.asJSON && (len(all) > 1 || c.minSevRank > 0) {
+		printSummary(stdout, all, ctx, c)
 	}
 	printIntrusiveHint(stderr, all, c)
 	return 0
@@ -183,7 +228,11 @@ func printResult(w io.Writer, r pipeline.Result, ctx score.Context, c config, le
 		fmt.Fprintln(w)
 	}
 	fmt.Fprintf(w, "[%s] ", color.Tier(string(score.TierFor(r.Note, ctx))))
-	fmt.Fprint(w, note.Text(r.Note))
+	if c.verbose || c.trace {
+		fmt.Fprint(w, note.TextVerbose(r.Note)) // expand finding Detail (e.g. the full also-exposed-in paths)
+	} else {
+		fmt.Fprint(w, note.Text(r.Note))
+	}
 	// Always show destinations: a preview in dry-run, an audit trail in --live
 	// (so a credential sent to an input-controlled host is visible).
 	if c.verbose || c.trace || !c.live || len(r.Planned) > 0 {
@@ -268,8 +317,8 @@ func wantColor(mode string, asJSON bool) bool {
 var categoryModules = map[string][]string{
 	"databases":  {"db_connection_string", "snowflake", "planetscale", "neon", "aiven", "upstash", "redis_cloud", "clickhouse_cloud", "clickhouse_selfhosted", "supabase", "mongodb_atlas", "databricks"},
 	"cloud":      {"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "azure_msal", "entra_sp", "digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "heroku", "render", "railway", "flyio", "vercel", "netlify", "fastly"},
-	"secrets":    {"vault", "onepassword_connect", "onepassword_sa", "onepassword_secret_key", "doppler", "conjur", "cyberark_pvwa", "keepass_db", "bitwarden", "bitwarden_vault", "vault_export_plaintext"},
-	"ai":         {"openai", "anthropic", "cohere", "mistral", "replicate", "huggingface", "gemini", "azure_openai", "groq", "together", "deepseek", "elevenlabs", "stability", "pinecone", "perplexity"},
+	"secrets":    {"vault", "onepassword_connect", "onepassword_sa", "onepassword_secret_key", "doppler", "conjur", "cyberark_pvwa", "keepass_db", "bitwarden", "bitwarden_vault", "vault_export_plaintext", "infisical", "akeyless", "delinea_secret_server"},
+	"ai":         {"openai", "anthropic", "cohere", "mistral", "replicate", "huggingface", "gemini", "azure_openai", "groq", "together", "deepseek", "elevenlabs", "stability", "pinecone", "perplexity", "openrouter", "xai", "fireworks", "claude_code_oauth"},
 	"vcs":        {"github_pat", "gitlab", "gitlab_ci_token"},
 	"kubernetes": {"kubeconfig"},
 	"identity":   {"okta", "auth0", "pingone", "pingfederate", "sailpoint", "jumpcloud", "workday", "duo", "servicenow"},
@@ -378,14 +427,17 @@ func printIntrusiveHint(stderr io.Writer, results []pipeline.Result, c config) {
 
 // printSummary prints a triage takeaway: the tier breakdown, the rotate-first
 // queue, and follow-up actions.
-func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context) {
+func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c config) {
 	var tiers []string
 	counts := map[score.Tier]int{}
 	var rotateFirst []string
-	var secretsStore, cantChar, dead int
+	var secretsStore, cantChar, dead, hidden int
 	for _, r := range results {
 		tier := score.TierFor(r.Note, ctx)
 		counts[tier]++
+		if score.Rank(tier) < c.minSevRank {
+			hidden++
+		}
 		if tier == score.TierCritical || tier == score.TierHigh {
 			rotateFirst = append(rotateFirst, note.Sanitize(firstField(r.Note.Title)))
 		}
@@ -412,6 +464,9 @@ func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context) {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "── summary ── %d credentials: %s\n", len(results), strings.Join(tiers, "  "))
+	if hidden > 0 {
+		fmt.Fprintf(w, "  %d below %s hidden (--min-severity)\n", hidden, strings.ToLower(c.minSeverity))
+	}
 	if len(rotateFirst) > 0 {
 		fmt.Fprintf(w, "  rotate first: %s\n", strings.Join(rotateFirst, ", "))
 	}
@@ -537,6 +592,8 @@ flags:
   --only TYPES        scope recon to module names or categories
                       (databases,cloud,secrets,ai,vcs,kubernetes,identity,backup,endpoint)
   --skip TYPES        exclude module names or categories from recon
+  --min-severity TIER only print findings >= tier (critical|high|medium|low|info|dead)
+  -o, --output FILE   write results to FILE instead of stdout (0600, color off)
   --user-agent UA     User-Agent for recon calls (default geiger/<version>)
   -v                  show planned/executed calls
   -q                  quiet: suppress the stderr status header and progress

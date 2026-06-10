@@ -28,6 +28,34 @@ const (
 	TierDead     Tier = "DEAD"
 )
 
+// tierRank orders tiers by severity for threshold filtering (higher = worse;
+// DEAD is the floor).
+var tierRank = map[Tier]int{
+	TierCritical: 5, TierHigh: 4, TierMedium: 3, TierLow: 2, TierInfo: 1, TierDead: 0,
+}
+
+// Rank returns a tier's severity rank (higher = more severe).
+func Rank(t Tier) int { return tierRank[t] }
+
+// ParseTier maps a case-insensitive tier name to a Tier.
+func ParseTier(s string) (Tier, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical", "crit":
+		return TierCritical, true
+	case "high":
+		return TierHigh, true
+	case "medium", "med":
+		return TierMedium, true
+	case "low":
+		return TierLow, true
+	case "info":
+		return TierInfo, true
+	case "dead":
+		return TierDead, true
+	}
+	return "", false
+}
+
 // Context is optional operator-supplied criticality: substrings whose presence
 // in a finding marks the credential as touching a crown-jewel asset.
 type Context struct {

@@ -164,7 +164,7 @@ func TestHuggingFaceWriteToken(t *testing.T) {
 }
 
 func TestHeuristicLiftsThinModule(t *testing.T) {
-	// Even with no per-module signal, the heuristic scanner surfaces admin/PII
+	// Even with no per-module signal, the heuristic scanner surfaces admin
 	// from a generic response — proving the drift safety net works in-catalog.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/user", func(w http.ResponseWriter, r *http.Request) {
@@ -175,9 +175,6 @@ func TestHeuristicLiftsThinModule(t *testing.T) {
 	got := driveModule(t, "grafana", module.Fields{"token": "glsa", "endpoint": "https://grafana.example"}, mux)
 	if got["server admin"].Flag != module.FlagForceMultiplier {
 		t.Errorf("grafana admin not flagged: %+v", got["server admin"])
-	}
-	if got["PII"].Flag != module.FlagWarn {
-		t.Errorf("heuristic PII not surfaced: %+v", got)
 	}
 }
 

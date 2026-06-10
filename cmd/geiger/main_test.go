@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	gmodule "github.com/puck-security/geiger/internal/module"
+	"github.com/puck-security/geiger/internal/pipeline"
+	"github.com/puck-security/geiger/internal/score"
 )
 
 func captureRun(statusOn bool, c config) (stdout, stderr string, code int) {
@@ -185,5 +189,68 @@ func TestIntrusiveDeepenHint(t *testing.T) {
 	_, errOut2, _ := captureRun(false, config{colorMode: "never", live: true, intrusive: true, args: []string{dir}})
 	if strings.Contains(errOut2, "go deeper") {
 		t.Errorf("no hint expected with --intrusive already set: %q", errOut2)
+	}
+}
+
+func TestMinSeverityShowResult(t *testing.T) {
+	ctx := score.Context{}
+	hi := pipeline.Result{Note: gmodule.Note{Findings: []gmodule.Finding{{Flag: gmodule.FlagForceMultiplier}}}} // HIGH (fm floor)
+	info := pipeline.Result{Note: gmodule.Note{Findings: []gmodule.Finding{{Flag: gmodule.FlagInfo}}}}          // INFO
+	dead := pipeline.Result{Note: gmodule.Note{Invalid: true}}                                                  // DEAD
+	hiOnly := config{minSeverity: "high", minSevRank: score.Rank(score.TierHigh)}
+	if !hiOnly.showResult(hi, ctx) {
+		t.Error("force-multiplier (HIGH) must pass --min-severity=high")
+	}
+	if hiOnly.showResult(info, ctx) || hiOnly.showResult(dead, ctx) {
+		t.Error("INFO and DEAD must be hidden by --min-severity=high")
+	}
+	// "exclude dead" via --min-severity=info: info shows, dead hidden.
+	infoUp := config{minSeverity: "info", minSevRank: score.Rank(score.TierInfo)}
+	if !infoUp.showResult(info, ctx) || infoUp.showResult(dead, ctx) {
+		t.Error("--min-severity=info should show INFO but hide DEAD")
+	}
+	// no flag → show everything, including dead.
+	if !(config{}).showResult(dead, ctx) {
+		t.Error("no --min-severity must show all (incl DEAD)")
+	}
+}
+
+func TestMinSeverityInvalidExits(t *testing.T) {
+	_, errOut, code := captureRun(false, config{colorMode: "never", minSeverity: "bogus", args: []string{t.TempDir()}})
+	if code != 2 {
+		t.Errorf("invalid --min-severity should exit 2, got %d", code)
+	}
+	if !strings.Contains(errOut, "invalid --min-severity") {
+		t.Errorf("expected an error message, got: %q", errOut)
+	}
+}
+
+func TestOutputToFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.env", "GITHUB_TOKEN=ghp_0123456789abcdefABCDEF0123456789abcd\n")
+	outPath := filepath.Join(dir, "report.txt")
+	stdoutCap, stderrCap, code := captureRun(false, config{colorMode: "always", output: outPath, args: []string{dir}})
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.TrimSpace(stdoutCap) != "" {
+		t.Errorf("with -o, results must not also go to stdout: %q", stdoutCap)
+	}
+	if !strings.Contains(stderrCap, "results written to "+outPath) {
+		t.Errorf("expected a stderr confirmation: %q", stderrCap)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "github_pat") {
+		t.Errorf("output file missing the result:\n%s", body)
+	}
+	if strings.Contains(body, "\x1b[") {
+		t.Errorf("output file must not contain ANSI color codes (got --color always):\n%q", body)
+	}
+	if fi, _ := os.Stat(outPath); fi.Mode().Perm() != 0o600 {
+		t.Errorf("output file perms = %v, want 0600", fi.Mode().Perm())
 	}
 }

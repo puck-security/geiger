@@ -10,8 +10,8 @@ import (
 	"github.com/puck-security/geiger/internal/recon"
 )
 
-func TestHeuristicPrivilegeAndPII(t *testing.T) {
-	// declared path is wrong (drift); heuristics must still surface admin + PII.
+func TestHeuristicPrivilegeAndIdentity(t *testing.T) {
+	// declared path is wrong (drift); heuristics must still surface admin + identity.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"account":{"login":"svc-bot","is_admin":true,"email":"svc@acme.com"}}`))
 	}))
@@ -29,8 +29,8 @@ func TestHeuristicPrivilegeAndPII(t *testing.T) {
 	if got["privileged"].Flag != module.FlagForceMultiplier {
 		t.Errorf("admin not detected heuristically: %+v", fs)
 	}
-	if got["PII"].Flag != module.FlagWarn {
-		t.Errorf("PII not detected: %+v", fs)
+	if _, ok := got["PII"]; ok {
+		t.Errorf("generic PII finding should no longer be emitted: %+v", fs)
 	}
 	if got["identity"].Value != "login=svc-bot" {
 		t.Errorf("fallback identity wrong: %+v", got["identity"])

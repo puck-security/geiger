@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,8 @@ type Options struct {
 	Endpoint     string
 	Proxy        string // SOCKS5/HTTP proxy URL for HTTP recon egress
 	Timeout      time.Duration
-	Concurrency  int // max credentials reconned at once on the live path (0 = default)
+	Concurrency  int       // max credentials reconned at once on the live path (0 = default)
+	StartedAt    time.Time // run start, stamped on live-validated findings (zero = now)
 	// Select, when set, scopes the run: only recognized credentials whose module
 	// name passes are reconned (the rest are skipped entirely, not just hidden).
 	// Backs --only/--skip so a second, deeper pass needn't re-exercise everything.
@@ -198,26 +200,84 @@ func (bt *Batch) RunConcurrent(srcs []Source, emit func(Result), progress func(d
 	return all
 }
 
-// AnnotateDuplicates appends an "also in" finding to each result whose secret was
-// also found in other source files (which were deduped away). Call it after all
-// sources have run and before sorting/printing. (Not usable with streaming,
-// where earlier results are already printed.)
+// AnnotateDuplicates appends an "also exposed in" finding to each result whose
+// secret was also found in other source files (deduped away). The value groups
+// those locations by exposure class — so N auto-saved history snapshots of one
+// file read as one source, not N leaks — and the full path list rides in Detail
+// (shown with -v / in JSON). Call it after all sources run, before sorting.
+// (Not usable with streaming, where earlier results are already printed.)
 func (bt *Batch) AnnotateDuplicates(results []Result) {
 	for i := range results {
 		locs := bt.st.dupLocs[results[i].secret]
 		if results[i].secret == "" || len(locs) == 0 {
 			continue
 		}
-		shown := locs
-		if len(shown) > 3 {
-			shown = shown[:3]
+		results[i].Note.Findings = append(results[i].Note.Findings, dupFinding(locs))
+	}
+}
+
+// dupFinding summarizes the other locations a secret was found in, grouped and
+// counted by exposure class, with the de-duplicated full path list in Detail.
+func dupFinding(locs []string) module.Finding {
+	seen := map[string]bool{}
+	var paths, order []string
+	counts := map[string]int{}
+	for _, p := range locs {
+		if seen[p] {
+			continue
 		}
-		v := fmt.Sprintf("%d other file(s): %s", len(locs), strings.Join(shown, ", "))
-		if len(locs) > len(shown) {
-			v += ", …"
+		seen[p] = true
+		paths = append(paths, p)
+		class, _, _ := classifyExposure(p)
+		if class == "" {
+			class = "other file"
 		}
-		results[i].Note.Findings = append(results[i].Note.Findings,
-			module.Finding{Key: "also in", Value: v, Flag: module.FlagInfo})
+		if counts[class] == 0 {
+			order = append(order, class)
+		}
+		counts[class]++
+	}
+	sort.Strings(paths)
+	sort.Strings(order)
+	var parts []string
+	for _, c := range order {
+		parts = append(parts, fmt.Sprintf("%d %s", counts[c], plural(c, counts[c])))
+	}
+	return module.Finding{Key: "also exposed in", Value: strings.Join(parts, "; "), Flag: module.FlagInfo, Detail: paths}
+}
+
+func plural(noun string, n int) string {
+	if n == 1 {
+		return noun
+	}
+	return noun + "s"
+}
+
+// annotateContext prepends exposure-surface + timeline context to a live note so
+// the responder leads with WHERE the credential was exposed (and what that
+// means) and WHEN. No-op for dead notes (their findings aren't rendered anyway).
+func annotateContext(res *Result, b parse.Blob, opts Options) {
+	if res.Note.Invalid {
+		return
+	}
+	var lead []module.Finding
+	if class, note, flag := classifyExposure(b.File); class != "" {
+		lead = append(lead, module.Finding{Key: "exposure", Value: note, Flag: flag})
+	}
+	if !b.ModTime.IsZero() {
+		lead = append(lead, module.Finding{Key: "source modified", Value: b.ModTime.Format("2006-01-02 (Mon)"), Flag: module.FlagInfo})
+	}
+	if len(lead) > 0 {
+		res.Note.Findings = append(lead, res.Note.Findings...)
+	}
+	// Live-validated: a credential that actually made recon calls (and wasn't
+	// rejected) gets a timestamp anchor for the incident timeline.
+	if opts.Live && len(res.Planned) > 0 {
+		ts := opts.StartedAt
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		res.Note.Findings = append(res.Note.Findings, module.Finding{Key: "validated live", Value: ts.UTC().Format(time.RFC3339), Flag: module.FlagInfo})
 	}
 }
 
@@ -240,6 +300,7 @@ func runBlob(b parse.Blob, reg *module.Registry, opts Options, st *harvestState,
 		}
 		res := runOne(b, reg, opts, m)
 		res.secret = m.Secret
+		annotateContext(&res, b, opts)
 		results = append(results, res)
 
 		// Transitive harvest: feed downstream secrets back through the pipeline.

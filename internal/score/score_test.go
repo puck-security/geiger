@@ -84,3 +84,23 @@ func TestSingleForceMultiplierFloorsHigh(t *testing.T) {
 		t.Errorf("single force-multiplier tier = %s, want >= HIGH", got)
 	}
 }
+
+func TestParseTierAndRank(t *testing.T) {
+	cases := map[string]Tier{"critical": TierCritical, "CRIT": TierCritical, "High": TierHigh, "med": TierMedium, "low": TierLow, "info": TierInfo, "dead": TierDead}
+	for in, want := range cases {
+		got, ok := ParseTier(in)
+		if !ok || got != want {
+			t.Errorf("ParseTier(%q) = %q,%v want %q", in, got, ok, want)
+		}
+	}
+	if _, ok := ParseTier("bogus"); ok {
+		t.Error("ParseTier should reject an unknown tier")
+	}
+	// strict severity ordering, DEAD is the floor
+	ladder := []Tier{TierCritical, TierHigh, TierMedium, TierLow, TierInfo, TierDead}
+	for i := 1; i < len(ladder); i++ {
+		if Rank(ladder[i-1]) <= Rank(ladder[i]) {
+			t.Errorf("tier ranks not strictly descending at %s/%s", ladder[i-1], ladder[i])
+		}
+	}
+}

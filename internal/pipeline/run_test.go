@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/puck-security/geiger/internal/module"
 	"github.com/puck-security/geiger/internal/parse"
@@ -100,7 +101,8 @@ func TestBatchDedupesSecretAcrossSources(t *testing.T) {
 			continue
 		}
 		for _, fnd := range r.Note.Findings {
-			if fnd.Key == "also in" && strings.Contains(fnd.Value, "2 other file") {
+			// summarized value, full paths in Detail
+			if fnd.Key == "also exposed in" && strings.Contains(fnd.Value, "2 other file") && len(fnd.Detail) == 2 {
 				found = true
 			}
 		}
@@ -197,5 +199,51 @@ func TestGuardedDialRefusesLinkLocal(t *testing.T) {
 	_, err := recon.GuardedDial(context.Background(), "tcp", "169.254.169.254:80")
 	if err != recon.ErrBlockedTarget {
 		t.Errorf("link-local should be refused, got %v", err)
+	}
+}
+
+func TestAnnotateContextExposureAndTimeline(t *testing.T) {
+	when := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	b := parse.Parse("x", "/Users/x/Library/Application Support/Code/Crashpad/completed/abc.dmp")
+	b.ModTime = when
+
+	// live + a call was made → exposure (warn), source modified, validated live.
+	res := Result{
+		Note:    module.Note{Title: "t", Findings: []module.Finding{{Key: "user", Value: "bob"}}},
+		Planned: []recon.PlannedCall{{Method: "GET"}},
+	}
+	annotateContext(&res, b, Options{Live: true, StartedAt: when})
+	idx := map[string]module.Finding{}
+	for _, f := range res.Note.Findings {
+		idx[f.Key] = f
+	}
+	if idx["exposure"].Flag != module.FlagWarn || !strings.Contains(idx["exposure"].Value, "crash dump") {
+		t.Errorf("crash-dump exposure not surfaced as warn: %+v", idx["exposure"])
+	}
+	if idx["source modified"].Value != "2026-06-05 (Fri)" {
+		t.Errorf("source modified = %q", idx["source modified"].Value)
+	}
+	if idx["validated live"].Value != "2026-06-05T12:00:00Z" {
+		t.Errorf("validated live = %q", idx["validated live"].Value)
+	}
+	// exposure/modified must lead the note (WHERE/WHEN first)
+	if res.Note.Findings[0].Key != "exposure" {
+		t.Errorf("exposure should lead the note, got %q", res.Note.Findings[0].Key)
+	}
+
+	// dry-run (no calls) → exposure/modified present, but NO validated-live stamp.
+	res2 := Result{Note: module.Note{Title: "t", Findings: []module.Finding{{Key: "user", Value: "bob"}}}}
+	annotateContext(&res2, b, Options{Live: false})
+	for _, f := range res2.Note.Findings {
+		if f.Key == "validated live" {
+			t.Error("dry-run must not stamp validated-live")
+		}
+	}
+
+	// dead credential → no context findings at all (not rendered anyway).
+	res3 := Result{Note: module.Note{Title: "t", Invalid: true}}
+	annotateContext(&res3, b, Options{Live: true, StartedAt: when})
+	if len(res3.Note.Findings) != 0 {
+		t.Errorf("invalid note must not get context findings: %+v", res3.Note.Findings)
 	}
 }

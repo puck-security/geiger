@@ -129,9 +129,9 @@ func heuristicFindings(decoded any, declaredEmpty bool) []module.Finding {
 	if r.privileged {
 		out = append(out, module.Finding{Key: "privileged", Value: r.privDetail + "  — admin/owner-level access", Flag: module.FlagForceMultiplier})
 	}
-	if r.pii {
-		out = append(out, module.Finding{Key: "PII", Value: "response exposes email/PII fields", Flag: module.FlagWarn})
-	}
+	// Note: the generic "PII : response exposes email/PII fields" heuristic was
+	// removed as redundant noise — the actual email/identity field is already
+	// surfaced. Module-authored PII *reach* findings (e.g. "subscriber PII") stay.
 	if declaredEmpty {
 		if k, v := r.identity(); v != "" {
 			out = append(out, module.Finding{Key: "identity", Value: k + "=" + v, Flag: module.FlagInfo})

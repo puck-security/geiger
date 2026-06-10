@@ -7,6 +7,34 @@ import (
 	"github.com/puck-security/geiger/internal/module"
 )
 
+func TestTextDetailOnlyInVerbose(t *testing.T) {
+	n := module.Note{
+		Title: "openai …AT51 (from .env: OPENAI_API_KEY)",
+		Findings: []module.Finding{
+			{Key: "also exposed in", Value: "8 editor local-history snapshots", Flag: module.FlagInfo,
+				Detail: []string{"/a/History/x/1.py", "/a/History/x/2.py"}},
+		},
+	}
+	// default (summarized): the grouped value shows, the paths do not.
+	plain := Text(n)
+	if !strings.Contains(plain, "8 editor local-history snapshots") {
+		t.Errorf("summary value missing:\n%s", plain)
+	}
+	if strings.Contains(plain, "1.py") {
+		t.Errorf("Detail paths must NOT appear in default output:\n%s", plain)
+	}
+	// verbose: the paths expand under the finding.
+	v := TextVerbose(n)
+	if !strings.Contains(v, "/a/History/x/1.py") || !strings.Contains(v, "/a/History/x/2.py") {
+		t.Errorf("Detail paths missing from verbose output:\n%s", v)
+	}
+	// JSON always carries the full Detail.
+	j := JSON(n)
+	if !strings.Contains(j, "\"detail\":[") || !strings.Contains(j, "2.py") {
+		t.Errorf("JSON detail missing:\n%s", j)
+	}
+}
+
 func TestTextRendersForceMultiplierAndCantCharacterize(t *testing.T) {
 	n := module.Note{
 		Title: "GitHub PAT ghp_…JV3Q (from .env: GITHUB_TOKEN)",

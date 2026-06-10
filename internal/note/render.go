@@ -48,8 +48,15 @@ const (
 	questMark = "?"  // can't characterize
 )
 
-// Text renders a Note as the short human-readable block.
-func Text(n module.Note) string {
+// Text renders a Note as the short human-readable block (summarized: a
+// finding's Detail expansion is omitted).
+func Text(n module.Note) string { return text(n, false) }
+
+// TextVerbose renders a Note and expands each finding's Detail (e.g. the full
+// list of files a secret was also found in) as indented lines beneath it.
+func TextVerbose(n module.Note) string { return text(n, true) }
+
+func text(n module.Note, verbose bool) string {
 	var b strings.Builder
 	b.WriteString(sanitize(n.Title))
 	b.WriteString("\n")
@@ -72,6 +79,11 @@ func Text(n module.Note) string {
 		}
 		b.WriteString(line)
 		b.WriteString("\n")
+		if verbose {
+			for _, d := range f.Detail {
+				fmt.Fprintf(&b, "  %-*s   - %s\n", w, "", sanitize(d))
+			}
+		}
 	}
 	if n.Summary != "" {
 		fmt.Fprintf(&b, "  → %s\n", sanitize(n.Summary))
@@ -112,9 +124,10 @@ type jsonNote struct {
 }
 
 type jsonFinding struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-	Flag  string `json:"flag"`
+	Key    string   `json:"key"`
+	Value  string   `json:"value"`
+	Flag   string   `json:"flag"`
+	Detail []string `json:"detail,omitempty"`
 }
 
 func flagName(fl module.FlagLevel) string {
@@ -136,7 +149,11 @@ func flagName(fl module.FlagLevel) string {
 func JSON(n module.Note) string {
 	jn := jsonNote{Title: sanitize(n.Title), Invalid: n.Invalid, Reason: sanitize(n.Reason), Summary: sanitize(n.Summary), Findings: []jsonFinding{}}
 	for _, f := range n.Findings {
-		jn.Findings = append(jn.Findings, jsonFinding{Key: sanitize(f.Key), Value: sanitize(f.Value), Flag: flagName(f.Flag)})
+		var detail []string
+		for _, d := range f.Detail {
+			detail = append(detail, sanitize(d))
+		}
+		jn.Findings = append(jn.Findings, jsonFinding{Key: sanitize(f.Key), Value: sanitize(f.Value), Flag: flagName(f.Flag), Detail: detail})
 	}
 	out, _ := json.Marshal(jn)
 	return string(out)

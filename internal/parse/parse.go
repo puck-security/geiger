@@ -6,6 +6,7 @@ package parse
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/puck-security/geiger/internal/module"
 )
@@ -18,13 +19,14 @@ type INISection struct {
 
 // Blob is the parsed view of one input source.
 type Blob struct {
-	Raw   string
-	File  string
-	Kind  module.SourceKind
-	Vars  map[string]string // flattened key=value (env, dotenv, all INI keys)
-	Lines map[string]int    // 1-based source line per variable name (when known)
-	JSON  map[string]any    // populated if the whole blob is a JSON object
-	INI   []INISection
+	Raw     string
+	File    string
+	Kind    module.SourceKind
+	ModTime time.Time         // source file mtime (zero if unknown: stdin/env/harvested)
+	Vars    map[string]string // flattened key=value (env, dotenv, all INI keys)
+	Lines   map[string]int    // 1-based source line per variable name (when known)
+	JSON    map[string]any    // populated if the whole blob is a JSON object
+	INI     []INISection
 }
 
 // Parse detects the format of raw and returns a Blob. fileHint (a path or
@@ -32,6 +34,17 @@ type Blob struct {
 func Parse(raw, fileHint string) Blob {
 	b := Blob{Raw: raw, File: fileHint, Vars: map[string]string{}, Lines: map[string]int{}, Kind: module.SourceFile}
 	trimmed := strings.TrimSpace(raw)
+
+	// Binary SQLite (e.g. an AI-IDE token store, state.vscdb): keep only the magic
+	// header so a recognizer can identify it by path, but don't KV/JSON-parse
+	// binary pages or let the raw scan scrape plaintext tokens out of them — that
+	// read is gated behind --live --intrusive and done via the file path.
+	if strings.HasPrefix(raw, "SQLite format 3") {
+		if len(b.Raw) > 16 {
+			b.Raw = b.Raw[:16]
+		}
+		return b
+	}
 
 	// JSON object (SA key, SSO cache, docker config, ADC).
 	if strings.HasPrefix(trimmed, "{") {

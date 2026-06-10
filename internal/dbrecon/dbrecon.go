@@ -407,6 +407,84 @@ func ReconSQLiteFile(ctx context.Context, path string) ([]module.Finding, error)
 	return out, nil
 }
 
+// ---- AI-IDE token store (VS Code / Cursor state.vscdb, read-only) ----
+
+// KVSecret is one plaintext key/value row pulled from an IDE token store.
+type KVSecret struct{ Key, Value string }
+
+// tokenKeyRe matches ItemTable keys that hold a credential value (not e.g. a
+// cached email), so harvest extracts only token-bearing rows.
+var tokenKeyRe = regexp.MustCompile(`(?i)(access[_-]?token|refresh[_-]?token|\btoken\b|secret|api[_-]?key|password|credential)`)
+
+// ReconVSCDBFile reads a VS Code / Cursor "state.vscdb" — a plaintext SQLite
+// key/value store (ItemTable) that AI IDEs use to hold OAuth/access tokens with
+// no isolation — and reports which credential keys it holds, returning the
+// plaintext token values for re-triage. Read-only by construction (mode=ro,
+// query_only) against a fixed key allowlist (no user input interpolated).
+// Encrypted/binary values are skipped: plaintext stores only, never OS-keychain
+// decryption.
+func ReconVSCDBFile(ctx context.Context, path string) ([]module.Finding, []KVSecret, error) {
+	if path == "" {
+		return nil, nil, fmt.Errorf("no file path")
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("file not found: %s", filepath.Base(path))
+	}
+	if fi.IsDir() {
+		return nil, nil, fmt.Errorf("not a file: %s", filepath.Base(path))
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=query_only(1)")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer db.Close()
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	rows, err := db.QueryContext(cctx, `SELECT key, value FROM ItemTable WHERE `+
+		`key LIKE 'cursorAuth/%' OR key LIKE 'secret://%' OR key LIKE '%token%' OR `+
+		`key LIKE '%secret%' OR key LIKE '%apiKey%' OR key LIKE '%api_key%' OR key LIKE '%password%' ORDER BY key`)
+	if err != nil {
+		return nil, nil, err // not a state.vscdb, or no ItemTable
+	}
+	defer rows.Close()
+	var keys []string
+	var harv []KVSecret
+	for rows.Next() {
+		var k string
+		var v []byte
+		if rows.Scan(&k, &v) != nil {
+			continue
+		}
+		keys = append(keys, k)
+		if sv := strings.TrimSpace(string(v)); tokenKeyRe.MatchString(k) && vscdbPlaintext(sv) {
+			harv = append(harv, KVSecret{Key: k, Value: sv})
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil, fmt.Errorf("no credential keys in ItemTable")
+	}
+	out := []module.Finding{
+		{Key: "ide token store", Value: filepath.Base(path) + " — " + itoa(len(keys)) + " credential key(s) stored in plaintext", Flag: module.FlagForceMultiplier},
+		{Key: "keys", Value: joinCapped(keys, 240), Flag: module.FlagInfo},
+	}
+	return out, harv, nil
+}
+
+// vscdbPlaintext reports whether a stored value is a usable plaintext credential
+// (printable, sane length) rather than an OS-keychain-encrypted binary blob.
+func vscdbPlaintext(v string) bool {
+	if len(v) < 8 || len(v) > 8192 {
+		return false
+	}
+	for _, r := range v {
+		if r == 0 || (r < 0x20 && r != '\t' && r != '\n' && r != '\r') {
+			return false
+		}
+	}
+	return true
+}
+
 func infoField(info, key string) string {
 	for _, line := range strings.Split(info, "\n") {
 		if strings.HasPrefix(line, key+":") {

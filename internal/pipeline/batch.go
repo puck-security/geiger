@@ -2,16 +2,20 @@ package pipeline
 
 import (
 	"encoding/json"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/puck-security/geiger/internal/module"
 	"github.com/puck-security/geiger/internal/parse"
 	"github.com/puck-security/geiger/internal/score"
 )
+
+const maxFileSize = 8 << 20 // 8 MB
 
 // Source is one parsed input plus where it came from (for batch reporting).
 type Source struct {
@@ -33,27 +37,108 @@ func WalkDir(dir string, onFile func(scanned int)) ([]Source, error) {
 		}
 		if d.IsDir() {
 			if skipDir(d.Name()) && path != dir {
+				// IDE dirs are noise, but the agentic config inside them is not:
+				// pull just the known MCP config before skipping the rest.
+				if ideConfigDir(d.Name()) {
+					addIDEConfigs(path, &out, onFile)
+				}
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if skipFile(d.Name()) {
-			return nil
-		}
-		if info, err := d.Info(); err == nil && info.Size() > 8<<20 {
-			return nil // skip large files
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		out = append(out, Source{Label: path, Blob: parse.Parse(string(data), path)})
-		if onFile != nil {
-			onFile(len(out))
-		}
+		addFile(path, d.Name(), &out, onFile)
 		return nil
 	})
 	return out, err
+}
+
+// addFile reads one regular file and appends a Source. Generated/lock/binary
+// noise is skipped, and a file over the size cap is skipped — UNLESS it's an
+// AI-IDE token store (state.vscdb), a known high-value target identified by its
+// SQLite header without slurping the whole multi-MB binary.
+func addFile(path, name string, out *[]Source, onFile func(int)) {
+	if skipFile(name) {
+		return
+	}
+	if isIDEStore(name) {
+		hdr, err := readHead(path, 64)
+		if err != nil || !strings.HasPrefix(hdr, "SQLite format 3") {
+			return
+		}
+		appendSource(out, path, hdr, fileModTime(path), onFile)
+		return
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() > maxFileSize {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	appendSource(out, path, string(data), fi.ModTime(), onFile)
+}
+
+func appendSource(out *[]Source, path, raw string, mod time.Time, onFile func(int)) {
+	b := parse.Parse(raw, path)
+	b.ModTime = mod
+	*out = append(*out, Source{Label: path, Blob: b})
+	if onFile != nil {
+		onFile(len(*out))
+	}
+}
+
+func fileModTime(path string) time.Time {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.ModTime()
+	}
+	return time.Time{}
+}
+
+func isIDEStore(name string) bool { return strings.HasSuffix(strings.ToLower(name), ".vscdb") }
+
+func ideConfigDir(name string) bool { return name == ".vscode" || name == ".idea" }
+
+// addIDEConfigs shallow-scans a skipped IDE dir for the MCP config it may hold
+// (mcp.json by name, or any .json that declares an "mcpServers" map), so a repo
+// scan still surfaces project-level agent credentials without descending into
+// the rest of the editor noise.
+func addIDEConfigs(dir string, out *[]Source, onFile func(int)) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".json") {
+			continue
+		}
+		if strings.EqualFold(name, "mcp.json") {
+			addFile(filepath.Join(dir, name), name, out, onFile)
+			continue
+		}
+		if hd, err := readHead(filepath.Join(dir, name), 8192); err == nil && strings.Contains(hd, "\"mcpServers\"") {
+			addFile(filepath.Join(dir, name), name, out, onFile)
+		}
+	}
+}
+
+// readHead returns up to n bytes from the start of a file.
+func readHead(path string, n int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	m, err := io.ReadFull(f, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return "", err
+	}
+	return string(buf[:m]), nil
 }
 
 // skipDir reports whether a directory is dependency/cache/build noise we should

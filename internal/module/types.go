@@ -68,6 +68,10 @@ type Finding struct {
 	Key   string // short stable key (identity, account, scopes, buckets, …)
 	Value string // human-readable value (already redacted where needed)
 	Flag  FlagLevel
+	// Detail holds the full expansion behind a summarized Value (e.g. the
+	// individual file paths behind "8 editor local-history snapshots"). The
+	// terminal shows it only with -v; JSON always emits it. Optional.
+	Detail []string
 }
 
 // Note is a module's summary for one credential.

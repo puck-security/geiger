@@ -167,3 +167,55 @@ func TestLooksLikeGitleaks(t *testing.T) {
 		t.Error("non-gitleaks json misdetected")
 	}
 }
+
+func TestWalkDirPicksUpIDEConfigs(t *testing.T) {
+	dir := t.TempDir()
+	vsc := filepath.Join(dir, ".vscode")
+	if err := os.MkdirAll(vsc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// .vscode is skipped wholesale, but its mcp.json must still be walked.
+	if err := os.WriteFile(filepath.Join(vsc, "mcp.json"), []byte(`{"servers":{"x":{"command":"y"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// settings.json (no mcpServers) must NOT be pulled out of the skipped dir.
+	if err := os.WriteFile(filepath.Join(vsc, "settings.json"), []byte(`{"editor.fontSize":12}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srcs, err := WalkDir(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, s := range srcs {
+		seen[filepath.Base(s.Label)] = true
+	}
+	if !seen["mcp.json"] {
+		t.Error(".vscode/mcp.json should be walked despite the dir skip")
+	}
+	if seen["settings.json"] {
+		t.Error("settings.json (no mcpServers) must not be pulled from a skipped IDE dir")
+	}
+}
+
+func TestWalkDirReadsLargeVSCDBByHeader(t *testing.T) {
+	dir := t.TempDir()
+	big := make([]byte, 9<<20) // over the 8MB cap
+	copy(big, []byte("SQLite format 3\x00"))
+	if err := os.WriteFile(filepath.Join(dir, "state.vscdb"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srcs, _ := WalkDir(dir, nil)
+	var found *Source
+	for i := range srcs {
+		if filepath.Base(srcs[i].Label) == "state.vscdb" {
+			found = &srcs[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("large state.vscdb should be picked up by header despite the size cap")
+	}
+	if len(found.Blob.Raw) > 64 {
+		t.Errorf("vscdb blob should carry only a header, got %d bytes", len(found.Blob.Raw))
+	}
+}
