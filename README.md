@@ -46,7 +46,7 @@ go build -o geiger ./cmd/geiger
 
 ## Tutorial
 
-geiger doesn't touch anythin on the network until you say so. Dry-run first 
+geiger doesn't touch anything on the network until you say so. Dry-run first 
 (default): recognizes the credential and prints the read-only calls it *would*
 make.
 
