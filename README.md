@@ -3,27 +3,27 @@
   <img alt="geiger" src="assets/geiger-lockup-light.svg" width="312">
 </picture>
 
-When a leaked credential turns up or a device is compromised, the critical question
-is **is it still live, what does it reach, and how bad?** Your secret scanner might
-have found the key but it won't answer that.
+**Is it still live, what does it reach, and how bad?** Read-only blast-radius triage for leaked credentials.
 
-`geiger` does. Pipe credential-bearing text at it: it recognizes the credentials
-inside, runs **read-only** recon with each, and prints what it is and what it can
-reach — ranked by blast radius.
+[![license: MIT](https://img.shields.io/badge/license-MIT-3ddc84.svg)](LICENSE)
+[![release](https://img.shields.io/badge/release-v1.0.1-3ddc84.svg)](../../releases)
+![go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8.svg)
+![recon: read-only](https://img.shields.io/badge/recon-read--only-3ddc84.svg)
+<!-- Once the repo is public, swap the static release/license badges for live ones:
+     https://img.shields.io/github/v/release/puck-security/geiger
+     https://img.shields.io/github/license/puck-security/geiger
+     https://img.shields.io/github/actions/workflow/status/puck-security/geiger/ci.yml?label=ci -->
 
-```
-$ cat ~/.aws/credentials | geiger --live
-[HIGH] aws …JV3Q (from ~/.aws/credentials: [default])
-  identity : arn:aws:iam::1234567890:user/ci-deploy   (IAM user)
-  account  : 1234567890
-  alias    : acme-production   ⚠
-  buckets  : 47 visible — incl. acme-prod-customer-backups   ⚠
-  secrets  : can list 31 secrets   ⚠⚠ force multiplier
-  → prod account + secrets access
-```
+<img src="assets/geiger-demo.svg" width="660"
+  alt="geiger triaging an AWS key — HIGH: prod account with secrets-manager access">
+
+Your secret scanner found the key — it won't tell you if it's still live or what it
+unlocks. `geiger` does: pipe any credential-bearing text at it and it recognizes the
+credentials inside, runs **read-only** recon with each, and ranks what they actually
+reach by blast radius.
 
 Dual-use triage: an incident responder's *"how bad is this?"* and a pentester's
-*"what does this key reach?"*. Read-only by construction and dry-run by default.
+*"what does this key reach?"*. Read-only by construction, dry-run by default.
 
 ---
 
@@ -46,15 +46,16 @@ go build -o geiger ./cmd/geiger
 
 ## Tutorial
 
-geiger doesn't touch anything on the network until you say so. Dry-run first 
-(default): recognizes the credential and prints the read-only calls it *would*
-make.
+geiger doesn't touch anything on the network until you say so. Dry-run first
+(default): it recognizes the credential and prints the read-only calls it *would*
+make. Try it on AWS's well-known example keys — no real secret needed:
 
 ```sh
-echo 'GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' | geiger
+printf 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n' | geiger
 ```
 
-Add `--live` to actually run them and get the impact note:
+That prints the read-only calls it *would* run (`sts:GetCallerIdentity`, …). Add
+`--live` with a real credential to actually run them and get the impact note:
 
 ```sh
 echo 'GITHUB_TOKEN=ghp_...' | geiger --live
@@ -116,6 +117,32 @@ are *locked*, not dead). `--ssh-correlate` lists candidate target hosts from
 ```sh
 geiger --ssh-correlate ~/.ssh
 ```
+
+---
+
+## Where geiger fits
+
+geiger is not a scanner — it starts where they stop. Detection finds the secret;
+geiger triages it. Point gitleaks or TruffleHog at the haystack, then pipe the
+report in (`--from-gitleaks` / `--from-trufflehog`) to learn which hits actually
+reach prod.
+
+| | gitleaks | TruffleHog | GitGuardian | **geiger** |
+|---|:---:|:---:|:---:|:---:|
+| Find secrets in code / git / files | ✅ | ✅ | ✅ | ▶ consumes their report |
+| Verify the secret is live | — | ✅ | ✅ | ✅ |
+| Characterize blast radius (identity, scope, reach) | — | partial¹ | partial² | ✅ ~163 types, scored |
+| Drain secret-managers + recursively triage downstream | — | — | — | ✅ |
+| DB / cluster / on-disk store recon (read-only) | — | — | — | ✅ |
+| Ranked for IR ("how bad, in what order") | — | — | partial | ✅ |
+| Local, no SaaS / account | ✅ | ✅ | — (SaaS) | ✅ |
+
+¹ TruffleHog's `analyze` enumerates permissions for ~a dozen providers — the closest
+peer; geiger generalizes that to ~163 credential types with blast-radius scoring and
+downstream harvest. ² GitGuardian assigns validity/severity inside its platform.
+
+Detection is their job and they're good at it — geiger doesn't replace them, it
+answers the question they leave open: *now that you found it, how bad is it?*
 
 ---
 

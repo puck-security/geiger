@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="272" viewBox="0 0 660 272"
+     font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
+     font-size="14" role="img"
+     aria-label="geiger triaging an AWS key: HIGH — prod account with secrets-manager access">
+  <rect x="0" y="0" width="660" height="272" rx="12" fill="#0d1117"/>
+  <!-- title bar -->
+  <circle cx="22" cy="22" r="6" fill="#ff5f56"/>
+  <circle cx="42" cy="22" r="6" fill="#ffbd2e"/>
+  <circle cx="62" cy="22" r="6" fill="#27c93f"/>
+  <text x="330" y="27" text-anchor="middle" fill="#6e7681" font-size="12">geiger — credential triage</text>
+  <line x1="0" y1="44" x2="660" y2="44" stroke="#21262d" stroke-width="1"/>
+  <!-- body: explicit x columns so alignment never depends on whitespace handling -->
+  <text y="72"><tspan x="24" fill="#3ddc84">$</tspan><tspan dx="8" fill="#c9d1d9">cat ~/.aws/credentials | geiger --live</tspan></text>
+  <text y="104"><tspan x="24" fill="#e5534b" font-weight="bold">[HIGH]</tspan><tspan dx="8" fill="#c9d1d9">aws</tspan><tspan dx="8" fill="#6e7681">…JV3Q (from ~/.aws/credentials: [default])</tspan></text>
+  <text y="126"><tspan x="42" fill="#8b949e">identity</tspan><tspan x="120" fill="#8b949e">:</tspan><tspan x="134" fill="#c9d1d9">arn:aws:iam::1234567890:user/ci-deploy</tspan><tspan dx="10" fill="#6e7681">(IAM user)</tspan></text>
+  <text y="148"><tspan x="42" fill="#8b949e">account</tspan><tspan x="120" fill="#8b949e">:</tspan><tspan x="134" fill="#c9d1d9">1234567890</tspan></text>
+  <text y="170"><tspan x="42" fill="#8b949e">alias</tspan><tspan x="120" fill="#8b949e">:</tspan><tspan x="134" fill="#c9d1d9">acme-production</tspan><tspan dx="10" fill="#d29922">⚠</tspan></text>
+  <text y="192"><tspan x="42" fill="#8b949e">buckets</tspan><tspan x="120" fill="#8b949e">:</tspan><tspan x="134" fill="#c9d1d9">47 visible — incl. </tspan><tspan fill="#d29922">acme-prod-customer-backups</tspan><tspan dx="8" fill="#d29922">⚠</tspan></text>
+  <text y="214"><tspan x="42" fill="#8b949e">secrets</tspan><tspan x="120" fill="#8b949e">:</tspan><tspan x="134" fill="#c9d1d9">can list 31 secrets</tspan><tspan dx="10" fill="#ff7b72" font-weight="bold">⚠⚠ force multiplier</tspan></text>
+  <text y="236"><tspan x="42" fill="#3ddc84" font-weight="bold">→ prod account + secrets access</tspan></text>
+</svg>
