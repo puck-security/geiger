@@ -166,6 +166,7 @@ answers the question they leave open: *now that you found it, how bad is it?*
 | `-o, --output FILE` | write results to FILE instead of stdout (`0600`, color off; status stays on stderr) |
 | `--json` | machine-readable output (NDJSON, one note per line) |
 | `--stream` | print results as found (discovery order) instead of sorted by impact |
+| `--no-reverse` | keep highest-impact findings first; by default an interactive terminal reverses them to the bottom (above the summary) so the worst don't scroll off the top |
 | `--only TYPES` / `--skip TYPES` | scope by module name or category (`databases`,`cloud`,`secrets`,`ai`,`vcs`,`kubernetes`,`identity`,`backup`,`endpoint`) |
 | `--from-gitleaks F` / `--from-trufflehog F` | triage each finding in a scanner report |
 | `--ssh-correlate` | SSH: read local hints for candidate target hosts |

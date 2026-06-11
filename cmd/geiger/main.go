@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -30,12 +31,12 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, contextTerms, colorMode, only, skip      string
-	userAgent, minSeverity, output                                                          string
-	timeout                                                                                 time.Duration
-	concurrency, minSevRank                                                                 int
-	args                                                                                    []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse bool
+	endpoint, proxy, fromGitleaks, fromTrufflehog, contextTerms, colorMode, only, skip                 string
+	userAgent, minSeverity, output                                                                     string
+	timeout                                                                                            time.Duration
+	concurrency, minSevRank                                                                            int
+	args                                                                                               []string
 }
 
 func main() {
@@ -56,6 +57,7 @@ func main() {
 	flag.BoolVar(&c.asJSON, "json", false, "machine-readable JSON output")
 	flag.BoolVar(&c.verbose, "v", false, "show the planned/executed recon calls")
 	flag.BoolVar(&c.stream, "stream", false, "stream results as they're found (discovery order) instead of buffering and sorting by impact")
+	flag.BoolVar(&c.noReverse, "no-reverse", false, "keep highest-impact findings first; don't reverse them to the bottom on an interactive terminal")
 	flag.BoolVar(&c.quiet, "q", false, "quiet: suppress the stderr status header and progress line")
 	flag.StringVar(&c.only, "only", "", "scope recon to these credential types — module names or categories (databases,cloud,secrets,ai,vcs,kubernetes,identity,backup,endpoint), comma-separated")
 	flag.StringVar(&c.skip, "skip", "", "exclude these credential types from recon — module names or categories, comma-separated")
@@ -70,6 +72,7 @@ func main() {
 
 	if *showVersion {
 		fmt.Println("geiger", version)
+		fmt.Println("by puck.security")
 		return
 	}
 	c.args = flag.Args()
@@ -175,6 +178,14 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		return 0
 	}
 	pipeline.SortBySeverity(results, ctx)
+	// On an interactive terminal, flip to lowest-impact-first so the CRITICAL/HIGH
+	// findings land at the bottom — right above the summary, where the eye ends a
+	// long scroll — instead of scrolling off the top. Piped/redirected/-o/JSON output
+	// stays highest-first so `| head`, pagers, saved reports, and NDJSON consumers are
+	// unaffected; --no-reverse forces the classic highest-first order everywhere.
+	if shouldReverse(c.noReverse, c.asJSON, c.output, isTTY(os.Stdout)) {
+		slices.Reverse(results)
+	}
 	printed := 0
 	for _, r := range results {
 		if !c.showResult(r, ctx) {
@@ -262,10 +273,25 @@ func header(c config) string {
 	return fmt.Sprintf("geiger %s · %s · %s", version, target, mode)
 }
 
+// byline is the attribution + version shown under the wordmark on --help and
+// --version. version is "dev" unless set at build time via -ldflags.
+func byline() string {
+	return "             by puck.security · " + version
+}
+
 // isTTY reports whether f is an interactive terminal.
 func isTTY(f *os.File) bool {
 	fi, err := f.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// shouldReverse decides whether sorted results print lowest-impact-first, so the
+// worst findings end up at the bottom of the screen (where the eye lands after a long
+// scroll) instead of off the top. Only on an interactive terminal: piped/redirected
+// (-o) output and JSON stay highest-first for `| head`/pagers/NDJSON, and --no-reverse
+// opts out entirely.
+func shouldReverse(noReverse, asJSON bool, output string, dstIsTTY bool) bool {
+	return !noReverse && !asJSON && output == "" && dstIsTTY
 }
 
 // status writes a transient, carriage-return-rewritten progress line to its
@@ -554,13 +580,14 @@ const banner = `
 ╚██████╔╝███████╗██║╚██████╔╝███████╗██║  ██║
  ╚═════╝ ╚══════╝╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝
        credential blast-radius triage
-
 `
 
 // usage prints the banner and a short command summary to stderr. It runs on
 // --help, on a flag error, and when geiger is invoked with no input.
 func usage() {
 	fmt.Fprint(os.Stderr, banner)
+	fmt.Fprintln(os.Stderr, color.Dim(byline()))
+	fmt.Fprintln(os.Stderr)
 	fmt.Fprint(os.Stderr, `usage:
   cat ~/.aws/credentials | geiger
   geiger .env
@@ -589,6 +616,7 @@ flags:
   --from-trufflehog F triage each finding in a TruffleHog v3 JSON report
   --json              machine-readable output
   --stream            stream results as found (discovery order), not sorted by impact
+  --no-reverse        keep highest-impact first (default reverses to the bottom on a TTY)
   --only TYPES        scope recon to module names or categories
                       (databases,cloud,secrets,ai,vcs,kubernetes,identity,backup,endpoint)
   --skip TYPES        exclude module names or categories from recon
