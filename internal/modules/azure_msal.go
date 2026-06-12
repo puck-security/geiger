@@ -46,20 +46,36 @@ func tenantOf(f module.Fields) string {
 }
 
 func (m azureMSAL) Authenticate(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
-	// Prefer a refresh-token exchange (public client → reliable Graph token).
-	if rt := f["refresh_token"]; rt != "" && f["client_id"] != "" {
-		tokenURL := fmt.Sprintf(azureMSALEndpoints.TokenTmpl, tenantOf(f))
-		tok, err := auth.RefreshToken(ctx, c, tokenURL, f["client_id"], "", rt,
-			url.Values{"scope": {"https://graph.microsoft.com/.default offline_access"}})
-		if err == nil && tok.Bearer != "" {
-			return tok, nil
-		}
-	}
-	// Otherwise use the cached access token directly (works while it's live).
-	if at := f["access_token"]; at != "" {
+	// A still-valid cached access token reads Graph with no new sign-in event — use
+	// it directly under --live. Redeeming the refresh token, by contrast, is an
+	// active Entra sign-in (it writes a sign-in log and may rotate the RT), so it's
+	// gated behind --intrusive; --min-footprint never refreshes.
+	if at := f["access_token"]; at != "" && !accessTokenExpired(at) {
 		return module.Token{Bearer: at}, nil
 	}
+	if c.Intrusive() && !c.MinFootprint() {
+		if rt := f["refresh_token"]; rt != "" && f["client_id"] != "" {
+			tokenURL := fmt.Sprintf(azureMSALEndpoints.TokenTmpl, tenantOf(f))
+			tok, err := auth.RefreshToken(ctx, c, tokenURL, f["client_id"], "", rt,
+				url.Values{"scope": {"https://graph.microsoft.com/.default offline_access"}})
+			if err == nil && tok.Bearer != "" {
+				return tok, nil
+			}
+		}
+	}
 	return module.Token{}, nil
+}
+
+// accessTokenExpired reports whether the cached access-token JWT is past its exp
+// (or undecodable / lacking exp) — i.e. whether reach can still be characterized
+// from the cached token alone, without redeeming the refresh token.
+func accessTokenExpired(at string) bool {
+	_, payload, err := decodeJWT(at)
+	if err != nil {
+		return true
+	}
+	exp, ok := claimTime(payload["exp"])
+	return !ok || time.Now().After(exp)
 }
 
 func (m azureMSAL) Recon(ctx context.Context, c *recon.Client, t module.Token, f module.Fields) ([]module.Finding, error) {
@@ -80,16 +96,24 @@ func (m azureMSAL) Recon(ctx context.Context, c *recon.Client, t module.Token, f
 		}
 		if exp, ok := claimTime(payload["exp"]); ok {
 			v := exp.UTC().Format("2006-01-02 15:04Z")
-			flag := module.FlagInfo
 			if time.Now().After(exp) {
-				v += "  (cached token EXPIRED — refresh token still usable)"
+				v += "  (expired)"
 			} else {
 				v += "  (live)"
 			}
-			out = append(out, module.Finding{Key: "cached token", Value: v, Flag: flag})
+			out = append(out, module.Finding{Key: "cached token", Value: v, Flag: module.FlagInfo})
 		}
 	} else if u := f["username"]; u != "" {
 		out = append(out, module.Finding{Key: "user", Value: u, Flag: module.FlagInfo})
+	}
+
+	// The refresh token is the real exposure: a public-client RT re-mints a live
+	// Entra session headlessly, with no secret — long-lived and usable even after
+	// the cached access token has expired.
+	if f["refresh_token"] != "" {
+		out = append(out, module.Finding{Key: "refresh token",
+			Value: "present — headlessly re-mintable into a live Entra session (public client, no secret); revoke the session to kill it",
+			Flag:  module.FlagForceMultiplier})
 	}
 
 	// Intune (device management) rides on the same Graph token; a token scoped
@@ -100,7 +124,19 @@ func (m azureMSAL) Recon(ctx context.Context, c *recon.Client, t module.Token, f
 			Flag:  module.FlagForceMultiplier})
 	}
 
+	// --min-footprint: identity is already offline (the JWT) — skip the fan-out.
+	if c.MinFootprint() {
+		return out, nil
+	}
+
 	if t.Bearer == "" || !c.Live() {
+		// Mapping live reach would mean redeeming the refresh token — an active
+		// Entra sign-in — so it's gated behind --intrusive.
+		if c.Live() && !c.Intrusive() && f["refresh_token"] != "" {
+			out = append(out, module.Finding{Key: "deepen",
+				Value: "re-run with --intrusive to redeem the refresh token and map Graph/ARM reach (this writes an Entra sign-in log)",
+				Flag:  cantFlag})
+		}
 		return out, nil
 	}
 

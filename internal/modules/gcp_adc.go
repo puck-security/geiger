@@ -25,11 +25,33 @@ type gcpADC struct{}
 func (gcpADC) Name() string { return "gcp_adc" }
 
 func (gcpADC) Authenticate(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
-	return auth.RefreshToken(ctx, c, gcpEndpoints.Token, f["client_id"], f["client_secret"], f["refresh_token"], url.Values{})
+	// Redeeming the user refresh token is an active sign-in (audit-logged, may
+	// rotate the token), so it's gated behind --intrusive; --min-footprint never
+	// refreshes. An ADC file carries no cached access token, so plain --live
+	// characterizes it from the file alone.
+	if c.Intrusive() && !c.MinFootprint() {
+		return auth.RefreshToken(ctx, c, gcpEndpoints.Token, f["client_id"], f["client_secret"], f["refresh_token"], url.Values{})
+	}
+	return module.Token{}, nil
 }
 
 func (gcpADC) Recon(ctx context.Context, c *recon.Client, t module.Token, f module.Fields) ([]module.Finding, error) {
-	var out []module.Finding
+	// The refresh token is the exposure: it re-mints a live access token headlessly.
+	out := []module.Finding{{Key: "refresh token",
+		Value: "gcloud user refresh token — headlessly re-mintable into a live access token; revoke it (gcloud auth application-default revoke)",
+		Flag:  module.FlagForceMultiplier}}
+
+	if t.Bearer == "" {
+		// Live reach needs the refresh token redeemed (an active token grant) —
+		// gated behind --intrusive.
+		if c.Live() && !c.Intrusive() && !c.MinFootprint() {
+			out = append(out, module.Finding{Key: "deepen",
+				Value: "re-run with --intrusive to redeem the refresh token and map identity + reachable projects (this performs a token grant)",
+				Flag:  cantFlag})
+		}
+		return out, nil
+	}
+
 	if s := t.Extra["scope"]; s != "" {
 		out = append(out, module.Finding{Key: "granted scopes", Value: s, Flag: module.FlagInfo})
 	}

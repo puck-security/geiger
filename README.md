@@ -98,13 +98,16 @@ geiger --live --min-footprint --proxy socks5://127.0.0.1:9050 .env
 geiger --live --json ./repo | jq .
 ```
 
-**Go deeper — `--intrusive`** (still read-only): connects to databases (Postgres,
-MySQL, MongoDB, Redis, SQL Server, Oracle, ClickHouse, Cassandra — fixed catalog
-queries, read-only session), reads local SQLite/IDE stores in place, hits cluster
-APIs, and **follows secrets-store reads** — draining Vault/Doppler/1Password/cloud
-secret managers (AWS SM, GCP SM, Azure Key Vault) and recursively triaging each
-extracted secret. The same fan-out a worm performs, so you see the *real* blast
-radius.
+**Go deeper — `--intrusive`** (doesn't modify resources, but leaves a trail):
+connects to databases (Postgres, MySQL, MongoDB, Redis, SQL Server, Oracle,
+ClickHouse, Cassandra — fixed catalog queries, read-only session), reads local
+SQLite/IDE stores in place, hits cluster APIs, **redeems cached user refresh
+tokens** (Azure / GCP sessions) to map their reach — an active sign-in that shows
+in the tenant's audit log — and **follows secrets-store reads**, draining
+Vault/Doppler/1Password/cloud secret managers (AWS SM, GCP SM, Azure Key Vault) and
+recursively triaging each extracted secret. The same fan-out a worm performs, so
+you see the *real* blast radius. Plain `--live` stays read-only: it uses a still-valid
+cached token but never redeems a refresh token.
 
 ```sh
 geiger --live --intrusive .env
