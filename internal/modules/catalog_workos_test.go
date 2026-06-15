@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -61,6 +62,20 @@ func TestWorkOSRecognizerStructural(t *testing.T) {
 	}
 	if wm.Fields["client_id"] != workosClientID {
 		t.Errorf("client_id = %q", wm.Fields["client_id"])
+	}
+}
+
+func TestWorkOSRecognizerStructuralLive(t *testing.T) {
+	// The recognizer must also claim the sk_live_ arm, not just sk_test_.
+	liveKey := strings.Replace(workosKey, "sk_test_", "sk_live_", 1)
+	b := parse.Parse("const k = \""+liveKey+"\";\n", "config.js")
+	matches := recognize.Recognize(b, "", module.Default)
+	wm := matchByModule(matches, "workos")
+	if wm == nil {
+		t.Fatalf("sk_live_ structural match missed: %+v", matches)
+	}
+	if wm.Fields["token"] != liveKey {
+		t.Errorf("token = %q", wm.Fields["token"])
 	}
 }
 

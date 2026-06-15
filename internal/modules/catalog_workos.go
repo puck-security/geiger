@@ -13,12 +13,14 @@ import (
 
 // WorkOS API keys are sk_<env>_ + base64("key_<id>"); the body always decodes to
 // ASCII beginning with "key_". Stripe keys share the sk_ prefix but are random
-// alphanumeric and won't decode this way — so we can claim a WorkOS key offline
-// and Override the gitleaks Stripe misattribution. The paired client_id
-// (client_<ULID>) is carried as context only; it is never required for a match.
+// alphanumeric; they may base64-decode, but the result will never start with
+// "key_", so the structural gate cleanly separates them — letting us claim a
+// WorkOS key offline and override the gitleaks Stripe misattribution. The paired
+// client_id (client_<ULID>) is carried as context only; it is never required for
+// a match.
 
 var (
-	workosKeyRe      = regexp.MustCompile(`sk_(?:test|live)_([A-Za-z0-9+/]+=*)`)
+	workosKeyRe      = regexp.MustCompile(`sk_(?:test|live)_([A-Za-z0-9+/]+={0,2})`)
 	workosClientIDRe = regexp.MustCompile(`\bclient_[0-9A-Z]{26}\b`)
 )
 
@@ -84,7 +86,14 @@ func workosRecognizer(b parse.Blob, _ string, _ *module.Registry) []recognize.Ma
 }
 
 // workosLabel returns the env-var name holding tok, else a sensible default.
+// Known names are checked in priority order first so the label is deterministic
+// when several vars hold the same value.
 func workosLabel(b parse.Blob, tok string) string {
+	for _, name := range []string{"WORKOS_API_KEY", "WORKOS_SECRET_KEY", "WORKOS_KEY"} {
+		if b.Vars[name] == tok {
+			return name
+		}
+	}
 	for k, v := range b.Vars {
 		if v == tok {
 			return k
