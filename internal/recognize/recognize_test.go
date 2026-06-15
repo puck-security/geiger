@@ -72,6 +72,17 @@ func TestSuppressOverriddenContainment(t *testing.T) {
 	}
 }
 
+func TestSuppressOverriddenIgnoresSelf(t *testing.T) {
+	// A match listing its own module in Overrides must not delete itself.
+	in := []Match{
+		{Module: "vendorx", Secret: "abc", Overrides: []string{"vendorx"}},
+	}
+	out := suppressOverridden(in)
+	if len(out) != 1 || out[0].Module != "vendorx" {
+		t.Fatalf("self-override must not drop the match: %+v", out)
+	}
+}
+
 func TestSuppressOverriddenEndToEnd(t *testing.T) {
 	reg := module.NewRegistry()
 	reg.MapRule("stripe-access-token", "stripe")

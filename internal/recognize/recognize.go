@@ -102,10 +102,13 @@ func isGeneric(m Match) bool {
 // truncated one.
 func suppressOverridden(in []Match) []Match {
 	drop := make([]bool, len(in))
-	for _, m := range in {
-		for _, o := range m.Overrides {
+	for i := range in {
+		for _, o := range in[i].Overrides {
 			for j := range in {
-				if in[j].Module == o && in[j].Secret != "" && strings.Contains(m.Secret, in[j].Secret) {
+				if j == i {
+					continue
+				}
+				if in[j].Module == o && in[j].Secret != "" && strings.Contains(in[i].Secret, in[j].Secret) {
 					drop[j] = true
 				}
 			}
