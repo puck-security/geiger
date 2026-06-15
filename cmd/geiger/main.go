@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/puck-security/geiger/internal/color"
+	"github.com/puck-security/geiger/internal/imds"
 	"github.com/puck-security/geiger/internal/note"
 	"github.com/puck-security/geiger/internal/parse"
 	"github.com/puck-security/geiger/internal/pipeline"
@@ -31,12 +33,12 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, contextTerms, colorMode, only, skip                 string
-	userAgent, minSeverity, output                                                                     string
-	timeout                                                                                            time.Duration
-	concurrency, minSevRank                                                                            int
-	args                                                                                               []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse, useMetadata bool
+	endpoint, proxy, fromGitleaks, fromTrufflehog, contextTerms, colorMode, only, skip                              string
+	userAgent, minSeverity, output                                                                                  string
+	timeout                                                                                                         time.Duration
+	concurrency, minSevRank                                                                                         int
+	args                                                                                                            []string
 }
 
 func main() {
@@ -46,6 +48,7 @@ func main() {
 	flag.BoolVar(&c.intrusive, "intrusive", false, "permit read-only-but-invasive actions: connect to databases, hit cluster APIs, harvest downstream secrets (requires --live)")
 	flag.BoolVar(&c.minFootprint, "min-footprint", false, "OPSEC: run only the identity (whoami) call per credential, skip inventory fan-out")
 	flag.BoolVar(&c.useEnv, "env", false, "read credentials from the current environment variables")
+	flag.BoolVar(&c.useMetadata, "metadata", false, "harvest cloud instance-metadata credentials (AWS/GCP/Azure/k8s/…) and triage them (requires --live)")
 	flag.StringVar(&c.endpoint, "endpoint", "", "tenant/instance/host for set-shaped credentials")
 	flag.StringVar(&c.proxy, "proxy", "", "route HTTP recon through a proxy (http/https/socks5 URL)")
 	flag.StringVar(&c.fromGitleaks, "from-gitleaks", "", "ingest a gitleaks JSON report and triage each finding")
@@ -87,6 +90,15 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 	color.Enabled = wantColor(c.colorMode, c.asJSON)
 	ctx := score.Context{Terms: splitCSV(c.contextTerms)}
 	st := &status{w: stderr, on: statusOn}
+
+	// --metadata reads the instance-metadata service — a network call — so it honors
+	// geiger's "no network until --live" promise: without --live it's a no-op notice.
+	if c.useMetadata && !c.live {
+		if !c.quiet {
+			fmt.Fprintln(stderr, "geiger: --metadata harvests live instance credentials; re-run with --live.")
+		}
+		return 0
+	}
 
 	// --min-severity threshold (zero rank = DEAD = show everything).
 	if c.minSeverity != "" {
@@ -255,6 +267,8 @@ func printResult(w io.Writer, r pipeline.Result, ctx score.Context, c config, le
 func header(c config) string {
 	target := "stdin"
 	switch {
+	case c.useMetadata:
+		target = "instance metadata"
 	case c.useEnv:
 		target = "environment"
 	case c.fromGitleaks != "":
@@ -342,7 +356,7 @@ func wantColor(mode string, asJSON bool) bool {
 // --only/--skip (and the deepen hint) can speak in categories, not 100+ names.
 var categoryModules = map[string][]string{
 	"databases":  {"db_connection_string", "snowflake", "planetscale", "neon", "aiven", "upstash", "redis_cloud", "clickhouse_cloud", "clickhouse_selfhosted", "supabase", "mongodb_atlas", "databricks"},
-	"cloud":      {"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "azure_msal", "entra_sp", "digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "heroku", "render", "railway", "flyio", "vercel", "netlify", "fastly"},
+	"cloud":      {"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "gcp_metadata", "azure_msal", "entra_sp", "alibaba", "oci_instance_principal", "digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "heroku", "render", "railway", "flyio", "vercel", "netlify", "fastly"},
 	"secrets":    {"vault", "onepassword_connect", "onepassword_sa", "onepassword_secret_key", "doppler", "conjur", "cyberark_pvwa", "keepass_db", "bitwarden", "bitwarden_vault", "vault_export_plaintext", "infisical", "akeyless", "delinea_secret_server"},
 	"ai":         {"openai", "anthropic", "cohere", "mistral", "replicate", "huggingface", "gemini", "azure_openai", "groq", "together", "deepseek", "elevenlabs", "stability", "pinecone", "perplexity", "openrouter", "xai", "fireworks", "claude_code_oauth"},
 	"vcs":        {"github_pat", "gitlab", "gitlab_ci_token"},
@@ -604,6 +618,7 @@ flags:
                       (read-only; requires --live)
   --min-footprint     OPSEC: identity call only, skip inventory fan-out
   --env               read current environment variables
+  --metadata          harvest cloud instance-metadata creds (AWS/GCP/Azure/k8s/…); needs --live
   --endpoint URL      tenant/instance/host for set-shaped credentials
   --proxy URL         route HTTP recon through a proxy (http/https/socks5)
   --timeout DUR       per-credential recon timeout (default 15s)
@@ -629,6 +644,25 @@ flags:
 }
 
 func readSources(c config, st *status) ([]pipeline.Source, error) {
+	if c.useMetadata {
+		st.update("probing instance metadata…")
+		creds, clouds, err := imds.Harvest(context.Background(), imds.Options{})
+		st.clear()
+		if err != nil {
+			return nil, err
+		}
+		if len(creds) == 0 {
+			return nil, fmt.Errorf("--metadata: no instance-metadata credentials found (not on a cloud instance, or IMDS disabled)")
+		}
+		if !c.quiet {
+			fmt.Fprintf(st.w, "geiger: harvested %d credential(s) from instance metadata (%s)\n", len(creds), strings.Join(clouds, ", "))
+		}
+		srcs := make([]pipeline.Source, 0, len(creds))
+		for _, cr := range creds {
+			srcs = append(srcs, pipeline.Source{Label: cr.Label, Blob: parse.Parse(cr.Blob, cr.Label)})
+		}
+		return srcs, nil
+	}
 	if c.useEnv {
 		return []pipeline.Source{{Label: "environment", Blob: parse.FromEnv(os.Environ())}}, nil
 	}

@@ -74,6 +74,12 @@ aws configure export-credentials | geiger --live
 # the current environment
 geiger --env --live
 
+# this box's own cloud identity — harvest the instance-metadata credential
+# (AWS instance role, GCP/Azure managed identity, k8s in-cluster SA, …) and
+# triage what it reaches. The post-exploitation question, answered read-only.
+geiger --metadata --live
+geiger --metadata --live --intrusive   # + in-cluster k8s RBAC, secrets-store drain
+
 # a whole repo / dir (walked; results sorted by impact)
 geiger --live ./leaked-repo
 
@@ -141,7 +147,7 @@ reach prod.
 | Local, no SaaS / account | ✅ | ✅ | — (SaaS) | ✅ |
 
 ¹ TruffleHog's `analyze` enumerates permissions for ~a dozen providers — the closest
-peer; geiger generalizes that to ~163 credential types with blast-radius scoring and
+peer; geiger generalizes that to ~166 credential types with blast-radius scoring and
 downstream harvest. ² GitGuardian assigns validity/severity inside its platform.
 
 Detection is their job and they're good at it — geiger doesn't replace them, it
@@ -160,6 +166,7 @@ answers the question they leave open: *now that you found it, how bad is it?*
 | `--intrusive` | connect to DBs / cluster APIs, read local stores, harvest downstream secrets (needs `--live`) |
 | `--min-footprint` | identity call only; skip inventory fan-out |
 | `--env` | read current environment variables |
+| `--metadata` | harvest this instance's metadata credential (AWS/GCP/Azure/k8s/Alibaba/DigitalOcean/OCI) and triage it; requires `--live` (it's a network read) |
 | `--endpoint URL` | host/instance for self-hosted & set-shaped creds |
 | `--proxy URL` | route HTTP recon via http/https/socks5 proxy |
 | `--timeout DUR` | per-credential recon timeout (default `15s`) |
@@ -209,7 +216,7 @@ key that runs code, wipes devices, restores backups, or reads *other* secrets is
 a force multiplier; a billed-usage API key is a warning.
 
 <details>
-<summary><b>Full coverage — 163 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
+<summary><b>Full coverage — 166 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
 
 **Cloud & hosting**
 
@@ -220,7 +227,10 @@ a force multiplier; a billed-usage API key is a warning.
 | `aws_sso_registration` | SSO client registration (no session) |
 | `gcp_service_account` | GCP service account — exchanged a read-only token |
 | `gcp_adc` | gcloud user credentials — delegated user access |
+| `gcp_metadata` | GCP instance service account — token-scoped reach |
 | `azure_msal` | Azure CLI session — Entra identity, refreshable headlessly |
+| `alibaba` | Alibaba Cloud RAM credential |
+| `oci_instance_principal` | OCI instance principal |
 | `digitalocean` | DigitalOcean — droplets, databases, Spaces, Kubernetes |
 | `digitalocean_oauth` | DigitalOcean OAuth — account API access |
 | `linode` | Linode — compute, storage, DNS account control |

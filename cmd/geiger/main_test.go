@@ -253,6 +253,21 @@ func TestReverseLandsWorstAtBottom(t *testing.T) {
 	}
 }
 
+// --metadata reads the metadata service (a network call), so without --live it's a
+// no-op notice — preserving geiger's "no network until --live" promise.
+func TestMetadataRequiresLive(t *testing.T) {
+	out, errOut, code := captureRun(false, config{colorMode: "never", useMetadata: true}) // no --live
+	if code != 0 {
+		t.Errorf("--metadata without --live should exit 0 (no-op), got %d", code)
+	}
+	if out != "" {
+		t.Errorf("expected no stdout, got %q", out)
+	}
+	if !strings.Contains(errOut, "re-run with --live") {
+		t.Errorf("expected the --live notice on stderr, got %q", errOut)
+	}
+}
+
 func TestMinSeverityInvalidExits(t *testing.T) {
 	_, errOut, code := captureRun(false, config{colorMode: "never", minSeverity: "bogus", args: []string{t.TempDir()}})
 	if code != 2 {

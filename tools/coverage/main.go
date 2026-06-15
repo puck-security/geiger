@@ -21,8 +21,8 @@ var groups = []struct {
 	names []string
 }{
 	{"Cloud & hosting", []string{
-		"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "azure_msal",
-		"digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "fastly",
+		"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "gcp_metadata", "azure_msal",
+		"alibaba", "oci_instance_principal", "digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "fastly",
 		"heroku", "render", "railway", "flyio", "netlify", "vercel", "tailscale", "terraform_cloud", "oci_config",
 	}},
 	{"Source control & packages", []string{
