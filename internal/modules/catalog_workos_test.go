@@ -115,8 +115,14 @@ func TestWorkOSRecon(t *testing.T) {
 	if got["org"].Value != "Acme" {
 		t.Errorf("org = %q", got["org"].Value)
 	}
+	if got["org-id"].Value != "org_1" {
+		t.Errorf("org-id = %q", got["org-id"].Value)
+	}
 	if got["sso-connections"].Flag != module.FlagForceMultiplier {
 		t.Errorf("sso-connections should be force-multiplier: %+v", got["sso-connections"])
+	}
+	if got["directory-connections"].Flag != module.FlagWarn {
+		t.Errorf("directory-connections should be warn: %+v", got["directory-connections"])
 	}
 	if got["directory-PII"].Flag != module.FlagWarn {
 		t.Errorf("directory-PII should be warn: %+v", got["directory-PII"])
