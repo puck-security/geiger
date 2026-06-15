@@ -11,7 +11,13 @@ import (
 )
 
 const (
-	workosKey      = "sk_test_a2V5XzAxSFpYQU1QTEUwUkVDT05LRVkwMDAwMDE=" // body decodes to "key_..."
+	// Realistic WorkOS key shape: "key_"+26-char ULID = 30 bytes -> 40 base64
+	// chars, NO padding (real keys are unpadded). The body decodes to "key_...",
+	// and — critically — gitleaks routes this exact string to its
+	// stripe-access-token rule, so TestWorkOSSuppressesStripeMisattribution
+	// genuinely exercises the override (verified by the recognize-package guard
+	// TestWorkOSKeyShapeWouldMisattributeToStripe).
+	workosKey      = "sk_test_a2V5XzAxSFpYQU1QTEUwUkVDT05LRVkwMDAwMDAx" // -> key_01HZXAMPLE0RECONKEY0000001
 	workosClientID = "client_01KV5WJNT7TTMGVEY0EXAMPLE0"
 )
 
@@ -91,14 +97,25 @@ func TestWorkOSRecognizerIgnoresRealStripe(t *testing.T) {
 	}
 }
 
+// TestWorkOSSuppressesStripeMisattribution locks shut the original bug: a WorkOS
+// API key shares the sk_test_/sk_live_ prefix with Stripe, so gitleaks flags
+// workosKey as stripe-access-token. The WorkOS recognizer claims it (structural
+// decode) and Overrides "stripe", so suppressOverridden must remove the stripe
+// match. workosKey is verified to route to gitleaks stripe absent the override —
+// see the recognize-package guard TestWorkOSKeyShapeWouldMisattributeToStripe,
+// which keeps this test from silently going vacuous if gitleaks rules drift.
 func TestWorkOSSuppressesStripeMisattribution(t *testing.T) {
 	b := parse.Parse("WORKOS_API_KEY="+workosKey+"\n", ".env")
 	matches := recognize.Recognize(b, "", module.Default)
 	if matchByModule(matches, "stripe") != nil {
 		t.Errorf("WorkOS key must not be attributed to stripe: %+v", matches)
 	}
-	if matchByModule(matches, "workos") == nil {
+	wm := matchByModule(matches, "workos")
+	if wm == nil {
 		t.Fatalf("workos not recognized: %+v", matches)
+	}
+	if wm.Fields["token"] != workosKey {
+		t.Errorf("workos token = %q, want full key %q", wm.Fields["token"], workosKey)
 	}
 }
 

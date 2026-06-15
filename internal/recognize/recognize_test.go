@@ -7,6 +7,37 @@ import (
 	"github.com/puck-security/geiger/internal/parse"
 )
 
+// TestWorkOSKeyShapeWouldMisattributeToStripe is the precondition guard for the
+// modules-package TestWorkOSSuppressesStripeMisattribution: it proves the WorkOS
+// key fixture genuinely trips the gitleaks stripe-access-token rule. The WorkOS
+// recognizer lives in the modules package and is NOT registered in this test
+// binary, so here the key routes to stripe with nothing to suppress it. If
+// gitleaks rules ever stop flagging this shape, this fails loudly — signalling
+// that the modules suppression test has gone vacuous. Keep the literal in sync
+// with modules.workosKey.
+func TestWorkOSKeyShapeWouldMisattributeToStripe(t *testing.T) {
+	reg := module.NewRegistry()
+	reg.MapRule("stripe-access-token", "stripe")
+	const workosKey = "sk_test_a2V5XzAxSFpYQU1QTEUwUkVDT05LRVkwMDAwMDAx" // == modules.workosKey
+	b := parse.Parse("WORKOS_API_KEY="+workosKey+"\n", ".env")
+	matches := Recognize(b, "", reg)
+	if m := findByModule(matches, "stripe"); m == nil {
+		t.Fatalf("gitleaks must flag the WorkOS key shape as stripe (else the modules suppression test is vacuous); got %+v", matches)
+	}
+	if findByModule(matches, "workos") != nil {
+		t.Fatalf("workos recognizer must not be registered in the recognize test binary: %+v", matches)
+	}
+}
+
+func findByModule(ms []Match, name string) *Match {
+	for i := range ms {
+		if ms[i].Module == name {
+			return &ms[i]
+		}
+	}
+	return nil
+}
+
 func TestGitleaksRoutesStripeToModule(t *testing.T) {
 	reg := module.NewRegistry()
 	reg.MapRule("stripe-access-token", "stripe")
