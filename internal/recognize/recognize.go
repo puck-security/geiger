@@ -18,6 +18,11 @@ type Match struct {
 	Secret string        // raw secret, for redaction in the note title
 	Label  string        // where it came from, e.g. ".env: GITHUB_TOKEN"
 	Line   int           // 1-based source line, 0 if unknown
+	// Overrides lists module names this match supersedes for the same credential
+	// (matched by secret containment). Lets a structured recognizer suppress a
+	// broad-net hit that misattributed the same value — e.g. a WorkOS key claimed
+	// over the gitleaks Stripe rule it collides with.
+	Overrides []string
 }
 
 // RecognizerFunc inspects a parsed blob and returns any matches. endpoint is the
@@ -42,6 +47,7 @@ func Recognize(b parse.Blob, endpoint string, reg *module.Registry) []Match {
 	}
 	matches = dedupe(matches)
 	matches = injectEndpoint(matches, endpoint)
+	matches = suppressOverridden(matches)
 	return suppressConsumedUnknowns(matches)
 }
 
@@ -87,6 +93,31 @@ func dedupe(in []Match) []Match {
 // specific structured recognizer claiming the same secret.
 func isGeneric(m Match) bool {
 	return strings.HasPrefix(m.Module, "__unknown__:") || m.Module == "jwt" || m.Module == "generic_secret"
+}
+
+// suppressOverridden drops matches a sibling explicitly supersedes via
+// Overrides. Containment (not equality) is used because a broad-net detector
+// like gitleaks may capture only a prefix of the full token (it stops at the
+// first '+'/'/' in a base64 body), so the overriding match's secret contains the
+// truncated one.
+func suppressOverridden(in []Match) []Match {
+	drop := make([]bool, len(in))
+	for _, m := range in {
+		for _, o := range m.Overrides {
+			for j := range in {
+				if in[j].Module == o && in[j].Secret != "" && strings.Contains(m.Secret, in[j].Secret) {
+					drop[j] = true
+				}
+			}
+		}
+	}
+	out := in[:0:0]
+	for i, m := range in {
+		if !drop[i] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // suppressConsumedUnknowns drops generic matches whose secret value is already a

@@ -53,3 +53,49 @@ func TestCustomRecognizerRuns(t *testing.T) {
 		t.Errorf("custom recognizer didn't fire: %+v", matches)
 	}
 }
+
+func TestSuppressOverriddenContainment(t *testing.T) {
+	// gitleaks may capture only a prefix of the full token (e.g. up to a '+'/'/'
+	// in a WorkOS base64 body), so suppression must be by containment.
+	in := []Match{
+		{Module: "stripe", Secret: "sk_test_PREFIX"},
+		{Module: "workos", Secret: "sk_test_PREFIXtail==", Overrides: []string{"stripe"}},
+	}
+	out := suppressOverridden(in)
+	for _, m := range out {
+		if m.Module == "stripe" {
+			t.Fatalf("stripe should be dropped by override: %+v", out)
+		}
+	}
+	if len(out) != 1 || out[0].Module != "workos" {
+		t.Fatalf("workos override should survive: %+v", out)
+	}
+}
+
+func TestSuppressOverriddenEndToEnd(t *testing.T) {
+	reg := module.NewRegistry()
+	reg.MapRule("stripe-access-token", "stripe")
+	RegisterRecognizer(func(b parse.Blob, _ string, _ *module.Registry) []Match {
+		if v := b.Vars["FAKE_OVERRIDE_KEY"]; v != "" {
+			return []Match{{Module: "vendorx", Secret: v,
+				Fields: module.Fields{"token": v}, Overrides: []string{"stripe"}}}
+		}
+		return nil
+	})
+	b := parse.Parse("FAKE_OVERRIDE_KEY=sk_live_4eC39HqLyjWDarjtT1zdp7dc\n", ".env")
+	matches := Recognize(b, "", reg)
+	for _, m := range matches {
+		if m.Module == "stripe" {
+			t.Fatalf("stripe should be suppressed by vendorx: %+v", matches)
+		}
+	}
+	ok := false
+	for _, m := range matches {
+		if m.Module == "vendorx" {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatalf("vendorx override missing: %+v", matches)
+	}
+}
