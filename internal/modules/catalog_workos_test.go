@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -87,5 +88,43 @@ func TestWorkOSRecognizerIgnoresRealStripe(t *testing.T) {
 	}
 	if matchByModule(matches, "stripe") == nil {
 		t.Errorf("stripe should still be recognized: %+v", matches)
+	}
+}
+
+func TestWorkOSRecon(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/organizations", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer sk_live_KEY" {
+			t.Errorf("workos must use Bearer, got %q", r.Header.Get("Authorization"))
+		}
+		respond(w, `{"data":[{"id":"org_1","name":"Acme"}],"list_metadata":{}}`)
+	})
+	mux.HandleFunc("/sso/connections", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"data":[{"id":"conn_1"}],"list_metadata":{}}`)
+	})
+	mux.HandleFunc("/directories", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"data":[{"id":"dir_1"}],"list_metadata":{}}`)
+	})
+	mux.HandleFunc("/directory_users", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"data":[{"id":"du_1"}],"list_metadata":{}}`)
+	})
+	mux.HandleFunc("/user_management/users", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"data":[{"id":"user_1"}],"list_metadata":{}}`)
+	})
+	got := driveModule(t, "workos", module.Fields{"token": "sk_live_KEY", "client_id": "client_x"}, mux)
+	if got["org"].Value != "Acme" {
+		t.Errorf("org = %q", got["org"].Value)
+	}
+	if got["sso-connections"].Flag != module.FlagForceMultiplier {
+		t.Errorf("sso-connections should be force-multiplier: %+v", got["sso-connections"])
+	}
+	if got["directory-PII"].Flag != module.FlagWarn {
+		t.Errorf("directory-PII should be warn: %+v", got["directory-PII"])
+	}
+	if got["user-PII"].Flag != module.FlagWarn {
+		t.Errorf("user-PII should be warn: %+v", got["user-PII"])
+	}
+	if got["reach"].Flag != module.FlagForceMultiplier {
+		t.Errorf("static reach should be force-multiplier: %+v", got["reach"])
 	}
 }
