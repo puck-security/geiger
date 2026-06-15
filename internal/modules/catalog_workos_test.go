@@ -91,6 +91,17 @@ func TestWorkOSRecognizerIgnoresRealStripe(t *testing.T) {
 	}
 }
 
+func TestWorkOSSuppressesStripeMisattribution(t *testing.T) {
+	b := parse.Parse("WORKOS_API_KEY="+workosKey+"\n", ".env")
+	matches := recognize.Recognize(b, "", module.Default)
+	if matchByModule(matches, "stripe") != nil {
+		t.Errorf("WorkOS key must not be attributed to stripe: %+v", matches)
+	}
+	if matchByModule(matches, "workos") == nil {
+		t.Fatalf("workos not recognized: %+v", matches)
+	}
+}
+
 func TestWorkOSRecon(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/organizations", func(w http.ResponseWriter, r *http.Request) {
