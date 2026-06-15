@@ -336,6 +336,7 @@ a force multiplier; a billed-usage API key is a warning.
 | `jumpcloud` | JumpCloud — directory, device & SSO admin |
 | `sailpoint` | SailPoint — identity governance (certs, provisioning) |
 | `auth0` | Auth0 — tenant management API (users, apps, rules) |
+| `workos` | WorkOS — SSO connections, Directory Sync (employee PII) & User Management |
 | `duo` | Duo — MFA admin API (bypass codes, user mgmt) |
 | `workday` | Workday — HR/finance records (PII) |
 
