@@ -13,6 +13,7 @@ import (
 
 func init() {
 	registerJira()
+	registerConfluence()
 	registerIvanti()
 	registerPingFederate()
 	registerSnipeIT()
@@ -47,6 +48,37 @@ func registerJira() {
 		}
 		return []recognize.Match{{Module: "jira",
 			Fields: module.Fields{"email": email, "token": tok, "endpoint": ep}, Secret: tok, Label: "JIRA_API_TOKEN"}}
+	})
+}
+
+// --- Confluence (Atlassian Cloud): API token via HTTP Basic (email:token) ---
+// Same account token as Jira reaches Confluence on the same site, so a shared
+// ATLASSIAN_* credential triggers both recognizers — one token, two findings.
+
+func registerConfluence() {
+	add("", r.HTTP{
+		ModuleName: "confluence", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "email", PassField: "token"},
+		Whoami: r.GET("/wiki/rest/api/user/current").Field("account", "accountId").Field("user", "displayName").Field("email", "email"),
+		Calls: []r.Call{
+			r.GET("/wiki/rest/api/space?limit=100").CountFrom("size", "spaces"),
+		},
+		Static: []module.Finding{{Key: "reach", Value: "read every accessible space and page — internal docs, runbooks, and credentials teams paste in plaintext; admin tokens manage spaces and users", Flag: warnFlag}},
+		Summarize: func([]module.Finding) string {
+			return "Confluence (Atlassian Cloud) — full space/page read; pages often hold secrets"
+		},
+	}.Module())
+	recognize.RegisterRecognizer(func(b parse.Blob, endpoint string, _ *module.Registry) []recognize.Match {
+		tok := firstVar(b.Vars, "CONFLUENCE_API_TOKEN", "ATLASSIAN_API_TOKEN", "CONFLUENCE_TOKEN")
+		email := firstVar(b.Vars, "CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL", "CONFLUENCE_USER")
+		if tok == "" || email == "" {
+			return nil
+		}
+		ep := resolveEndpoint(b, endpoint, "CONFLUENCE_BASE_URL", "CONFLUENCE_URL", "ATLASSIAN_URL")
+		if ep == "" {
+			return nil
+		}
+		return []recognize.Match{{Module: "confluence",
+			Fields: module.Fields{"email": email, "token": tok, "endpoint": ep}, Secret: tok, Label: "CONFLUENCE_API_TOKEN"}}
 	})
 }
 

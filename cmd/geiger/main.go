@@ -63,7 +63,7 @@ func main() {
 	flag.BoolVar(&c.stream, "stream", false, "stream results as they're found (discovery order) instead of buffering and sorting by impact")
 	flag.BoolVar(&c.noReverse, "no-reverse", false, "keep highest-impact findings first; don't reverse them to the bottom on an interactive terminal")
 	flag.BoolVar(&c.quiet, "q", false, "quiet: suppress the stderr status header and progress line")
-	flag.StringVar(&c.only, "only", "", "scope recon to these credential types — module names or categories (databases,cloud,secrets,ai,vcs,kubernetes,identity,backup,endpoint), comma-separated")
+	flag.StringVar(&c.only, "only", "", "scope recon to these credential types — module names or categories (databases,cloud,secrets,ai,vcs,kubernetes,identity,itsm,backup,endpoint), comma-separated")
 	flag.StringVar(&c.skip, "skip", "", "exclude these credential types from recon — module names or categories, comma-separated")
 	flag.StringVar(&c.userAgent, "user-agent", "", "User-Agent for recon calls (default geiger/<version>)")
 	flag.DurationVar(&c.timeout, "timeout", 15*time.Second, "per-credential recon timeout (e.g. 5s, 30s)")
@@ -365,6 +365,7 @@ var categoryModules = map[string][]string{
 	"vcs":        {"github_pat", "gitlab", "gitlab_ci_token"},
 	"kubernetes": {"kubeconfig"},
 	"identity":   {"okta", "auth0", "pingone", "pingfederate", "sailpoint", "jumpcloud", "workday", "duo", "servicenow"},
+	"itsm":       {"jira", "confluence", "ivanti", "snipeit"},
 	"backup":     {"veeam", "acronis", "cohesity", "netbackup", "commvault"},
 	"endpoint":   {"ninjaone", "kandji", "jamf", "mosyle", "automox", "tanium", "ansible_awx", "puppet_enterprise", "saltstack", "fleet", "atera"},
 }
@@ -638,7 +639,7 @@ flags:
   --stream            stream results as found (discovery order), not sorted by impact
   --no-reverse        keep highest-impact first (default reverses to the bottom on a TTY)
   --only TYPES        scope recon to module names or categories
-                      (databases,cloud,secrets,ai,vcs,kubernetes,identity,backup,endpoint)
+                      (databases,cloud,secrets,ai,vcs,kubernetes,identity,itsm,backup,endpoint)
   --skip TYPES        exclude module names or categories from recon
   --min-severity TIER only print findings >= tier (critical|high|medium|low|info|dead)
   -o, --output FILE   write results to FILE instead of stdout (0600, color off)

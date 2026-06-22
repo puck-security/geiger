@@ -29,6 +29,38 @@ func TestJiraRecon(t *testing.T) {
 	}
 }
 
+func TestConfluenceRecon(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/wiki/rest/api/user/current", func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != "jane@acme.com" || p != "CTOK" {
+			t.Errorf("confluence must use Basic email:token, got %q:%q ok=%v", u, p, ok)
+		}
+		respond(w, `{"accountId":"5b","displayName":"Jane","email":"jane@acme.com"}`)
+	})
+	mux.HandleFunc("/wiki/rest/api/space", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"results":[{"key":"DEV"},{"key":"OPS"}],"size":2}`)
+	})
+	got := driveModule(t, "confluence", module.Fields{"email": "jane@acme.com", "token": "CTOK", "endpoint": "https://acme.atlassian.net"}, mux)
+	if got["account"].Value != "5b" || got["spaces"].Value != "2" {
+		t.Errorf("confluence fields wrong: %+v", got)
+	}
+	if got["reach"].Flag != module.FlagWarn {
+		t.Errorf("confluence reach should be warn: %+v", got["reach"])
+	}
+}
+
+// One Atlassian Cloud API token reaches both products, so a shared ATLASSIAN_*
+// credential must surface both a jira and a confluence finding.
+func TestAtlassianSharedTokenHitsBoth(t *testing.T) {
+	env := "ATLASSIAN_URL=https://acme.atlassian.net\nATLASSIAN_EMAIL=j@acme.com\nATLASSIAN_API_TOKEN=ATATTshared\n"
+	by := modulesOf(recognize.Recognize(parse.Parse(env, ".env"), "", module.Default))
+	for _, m := range []string{"jira", "confluence"} {
+		if _, ok := by[m]; !ok {
+			t.Errorf("shared Atlassian token should trigger %s: %+v", m, by)
+		}
+	}
+}
+
 func TestIvantiRecon(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/odata/businessobject/employees", func(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +148,8 @@ func TestClickHouseSelfHostedRecon(t *testing.T) {
 func TestITSMIAMRecognizers(t *testing.T) {
 	cases := []struct{ name, env, endpoint, module, secret string }{
 		{"jira", "JIRA_BASE_URL=https://acme.atlassian.net\nJIRA_EMAIL=j@acme.com\nJIRA_API_TOKEN=jt\n", "", "jira", "jt"},
+		{"confluence", "CONFLUENCE_BASE_URL=https://acme.atlassian.net\nCONFLUENCE_EMAIL=j@acme.com\nCONFLUENCE_API_TOKEN=ct\n", "", "confluence", "ct"},
+		{"confluence via --endpoint", "CONFLUENCE_EMAIL=j@acme.com\nCONFLUENCE_API_TOKEN=ct2\n", "https://acme.atlassian.net", "confluence", "ct2"},
 		{"ivanti", "IVANTI_URL=https://ivanti.acme.com\nIVANTI_API_KEY=ik\n", "", "ivanti", "ik"},
 		{"pingfederate", "PINGFEDERATE_URL=https://pf:9999\nPINGFEDERATE_USERNAME=a\nPINGFEDERATE_PASSWORD=pw\n", "", "pingfederate", "pw"},
 		{"clickhouse cloud", "CLICKHOUSE_KEY_ID=kid\nCLICKHOUSE_KEY_SECRET=ksec\n", "", "clickhouse_cloud", "ksec"},
