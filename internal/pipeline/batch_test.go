@@ -270,6 +270,36 @@ func TestFromNucleiKeepsNonBodyExtracted(t *testing.T) {
 	}
 }
 
+func TestFromNucleiRejectsNonJSON(t *testing.T) {
+	dir := t.TempDir()
+	// nuclei's human output (no -j): lines start with "[template-id]", not JSON.
+	human := "[exposed-dotenv] [http] [high] http://localhost:8000/.env [sk_live_x]\n"
+	p := filepath.Join(dir, "human.txt")
+	if err := os.WriteFile(p, []byte(human), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := FromNuclei(p)
+	if err == nil || !strings.Contains(err.Error(), "-j") {
+		t.Fatalf("expected a '-j' hint error on non-JSON input, got %v", err)
+	}
+}
+
+func TestFromNucleiEmptyIsNotError(t *testing.T) {
+	dir := t.TempDir()
+	// a real `nuclei -j` run that finds nothing yields empty output — not an error.
+	p := filepath.Join(dir, "empty.jsonl")
+	if err := os.WriteFile(p, []byte("\n  \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srcs, err := FromNuclei(p)
+	if err != nil {
+		t.Fatalf("empty nuclei output should not error: %v", err)
+	}
+	if len(srcs) != 0 {
+		t.Fatalf("expected 0 sources, got %d", len(srcs))
+	}
+}
+
 func TestWalkDirSkipsNoiseDirs(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755)

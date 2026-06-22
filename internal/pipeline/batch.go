@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -334,7 +335,9 @@ func FromNuclei(path string) ([]Source, error) {
 		data = b
 	}
 	var findings []nucleiFinding
-	if json.Unmarshal(data, &findings) != nil {
+	arrayOK := json.Unmarshal(data, &findings) == nil
+	sawObj := false
+	if !arrayOK {
 		// fall back to newline-delimited JSON (the default -j stream)
 		findings = findings[:0]
 		for line := range strings.SplitSeq(string(data), "\n") {
@@ -342,11 +345,19 @@ func FromNuclei(path string) ([]Source, error) {
 			if line == "" || !strings.HasPrefix(line, "{") {
 				continue
 			}
+			sawObj = true
 			var f nucleiFinding
 			if json.Unmarshal([]byte(line), &f) == nil {
 				findings = append(findings, f)
 			}
 		}
+	}
+	// Guard the common mistake: piping nuclei WITHOUT -j. Its human output (lines
+	// like "[template-id] [http] ...") isn't JSON, so we'd otherwise silently find
+	// nothing. A real `nuclei -j` run with no hits yields empty input, which is a
+	// legitimate "nothing found" — so only error on non-empty, non-JSON input.
+	if len(findings) == 0 && !arrayOK && !sawObj && strings.TrimSpace(string(data)) != "" {
+		return nil, fmt.Errorf("--from-nuclei: input is not nuclei JSON — run nuclei with -j (e.g. `nuclei … -t templates/ -j | geiger --from-nuclei -`)")
 	}
 	var out []Source
 	for _, f := range findings {
