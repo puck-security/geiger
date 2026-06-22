@@ -51,7 +51,10 @@ func init() {
 	// ---- Cloud / infra ----
 	add("cloudflare-api-key", r.HTTP{
 		ModuleName: "cloudflare", Base: "https://api.cloudflare.com/client/v4", Auth: r.AuthSpec{Kind: r.Bearer},
-		Whoami: r.GET("/user/tokens/verify").Field("token-status", "result.status").Field("token-id", "result.id"),
+		// /user/tokens/verify is user-scoped and 401s for account/zone-scoped
+		// tokens that are still live against /zones — keep probing past that 401.
+		MultiScope: true,
+		Whoami:     r.GET("/user/tokens/verify").Field("token-status", "result.status").Field("token-id", "result.id"),
 		// Blast radius (each call may 403 on a scoped token — geiger skips those):
 		// reachable accounts, zones (DNS surface), and best-effort identity.
 		Calls: []r.Call{

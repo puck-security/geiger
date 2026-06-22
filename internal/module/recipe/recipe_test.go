@@ -140,6 +140,29 @@ func TestRecipeNonFatalWhoami(t *testing.T) {
 	}
 }
 
+func TestRecipeWhoami401ButScopedCallLive(t *testing.T) {
+	// A multi-scope API (e.g. Cloudflare) can 401 the user-scoped whoami for an
+	// account/zone-scoped token that is live elsewhere → must NOT be DEAD.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) })
+	mux.HandleFunc("/zones", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"result_info":{"total_count":7}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	m := HTTP{ModuleName: "cf", Base: srv.URL, Auth: AuthSpec{Kind: Bearer}, MultiScope: true,
+		Whoami: GET("/verify").Field("status", "result.status"),
+		Calls:  []Call{GET("/zones").CountFrom("result_info.total_count", "zones")}}.Module()
+	fs, _ := m.Recon(context.Background(), recon.New(srv.Client(), true), module.Token{}, module.Fields{"token": "t"})
+	note := m.Summarize("T", fs)
+	if note.Invalid {
+		t.Errorf("token live against /zones must not be DEAD despite whoami 401: %+v", fs)
+	}
+	if len(fs) == 0 || fs[0].Key != "zones" || fs[0].Value != "7" {
+		t.Errorf("expected zones=7 finding: %+v", fs)
+	}
+}
+
 func TestRecipeOAuthValidDespiteScopedRecon(t *testing.T) {
 	// Token exchange succeeds but every recon call 403s → still valid, not dead.
 	mux := http.NewServeMux()

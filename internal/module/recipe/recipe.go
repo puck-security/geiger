@@ -145,6 +145,13 @@ type HTTP struct {
 	Auth       AuthSpec
 	Whoami     Call
 	Calls      []Call // additional inventory/count calls
+	// MultiScope marks an API where the whoami can 401 for a token that is still
+	// live against a different scope (e.g. Cloudflare's user-scoped
+	// /user/tokens/verify rejects an account/zone-scoped token). For these we keep
+	// probing the other calls after a whoami 401 instead of stopping early, so a
+	// scoped-but-live key isn't falsely declared DEAD. Default off preserves the
+	// OPSEC early-stop for single-scope APIs.
+	MultiScope bool
 	// TitlePrefix is shown before the redacted key in the note title.
 	TitlePrefix string
 	// Summarize, if set, produces the one-line takeaway from findings.
@@ -270,15 +277,18 @@ func (m *recipeModule) Recon(ctx context.Context, c *recon.Client, t module.Toke
 		calls = append(calls, m.spec.Calls...)
 	}
 	// Per-call errors are non-fatal: a valid-but-scoped key may be denied on the
-	// whoami yet succeed elsewhere. But a 401 on the whoami means the credential
-	// itself is rejected, so stop there rather than fan out against a dead key
-	// (403 = authenticated-but-forbidden, i.e. scoped → keep probing).
+	// whoami yet succeed elsewhere (403 = authenticated-but-forbidden, scoped).
 	//
-	// We also track *why* recon came up empty so we don't bury a live credential
-	// as DEAD: a 2xx/403 means the token was accepted (authed) even if we failed
-	// to parse identity; a transport error means the endpoint was unreachable
-	// (which says nothing about validity); only a 401 on the whoami is dead.
-	var authed, sawHTTP, rejected, transportErr bool
+	// A 401 on the whoami is a strong dead signal. For a single-scope API we stop
+	// there (OPSEC: don't fan out against an apparently-dead key). For a MultiScope
+	// API the whoami can 401 while the token is live against another scope, so we
+	// keep probing and only treat it as DEAD if nothing else accepts it.
+	//
+	// We track *why* recon came up empty so we don't bury a live credential as
+	// DEAD: a 2xx/403 means the token was accepted (authed) even if we failed to
+	// parse identity; a transport error means the endpoint was unreachable (says
+	// nothing about validity); a whoami 401 with no other acceptance is dead.
+	var authed, sawHTTP, whoami401, transportErr bool
 	for i, call := range calls {
 		fs, status, err := m.runCall(ctx, c, base, call, f, t)
 		if err != nil {
@@ -289,8 +299,11 @@ func (m *recipeModule) Recon(ctx context.Context, c *recon.Client, t module.Toke
 					authed = true // authenticated but forbidden → scoped, not dead
 				}
 				if i == 0 && se.code == http.StatusUnauthorized {
-					rejected = true
-					break
+					whoami401 = true
+					if !m.spec.MultiScope {
+						break // single-scope: an apparently-dead key, stop early
+					}
+					// MultiScope: keep probing — other scopes may accept it.
 				}
 			} else {
 				transportErr = true // DNS/refused/timeout — not a verdict on the key
@@ -313,14 +326,15 @@ func (m *recipeModule) Recon(ctx context.Context, c *recon.Client, t module.Toke
 		return dedupeByKey(findings), nil
 	}
 	// Empty recon: classify rather than defaulting to DEAD (Summarize marks an
-	// empty note Invalid). Only an outright 401 leaves it empty.
+	// empty note Invalid). Acceptance anywhere (authed) wins over a whoami 401.
 	switch {
-	case rejected:
-		// genuinely rejected → leave empty so Summarize marks it Invalid (DEAD).
 	case authed:
 		findings = append(findings, module.Finding{Key: "authenticated",
 			Value: "credential accepted (HTTP 2xx/403) but identity not parsed — scoped key or the API shape changed",
 			Flag:  module.FlagWarn})
+	case whoami401:
+		// identity call rejected the token and nothing else accepted it →
+		// genuinely dead. Leave empty so Summarize marks it Invalid (DEAD).
 	case transportErr && !sawHTTP:
 		findings = append(findings, module.Finding{Key: "unreachable",
 			Value: "endpoint unreachable from here — credential may be valid in its own network",

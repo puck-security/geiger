@@ -365,7 +365,7 @@ var categoryModules = map[string][]string{
 	"vcs":        {"github_pat", "gitlab", "gitlab_ci_token"},
 	"kubernetes": {"kubeconfig"},
 	"identity":   {"okta", "auth0", "pingone", "pingfederate", "sailpoint", "jumpcloud", "workday", "duo", "servicenow"},
-	"itsm":       {"jira", "confluence", "ivanti", "snipeit"},
+	"itsm":       {"jira", "confluence", "atlassian", "ivanti", "snipeit"},
 	"backup":     {"veeam", "acronis", "cohesity", "netbackup", "commvault"},
 	"endpoint":   {"ninjaone", "kandji", "jamf", "mosyle", "automox", "tanium", "ansible_awx", "puppet_enterprise", "saltstack", "fleet", "atera"},
 }

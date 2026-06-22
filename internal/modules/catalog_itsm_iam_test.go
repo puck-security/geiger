@@ -50,7 +50,8 @@ func TestConfluenceRecon(t *testing.T) {
 }
 
 // One Atlassian Cloud API token reaches both products, so a shared ATLASSIAN_*
-// credential must surface both a jira and a confluence finding.
+// credential must surface both a jira and a confluence finding — and NOT the
+// bare-token "atlassian" info match (it's fully validatable here).
 func TestAtlassianSharedTokenHitsBoth(t *testing.T) {
 	env := "ATLASSIAN_URL=https://acme.atlassian.net\nATLASSIAN_EMAIL=j@acme.com\nATLASSIAN_API_TOKEN=ATATTshared\n"
 	by := modulesOf(recognize.Recognize(parse.Parse(env, ".env"), "", module.Default))
@@ -58,6 +59,27 @@ func TestAtlassianSharedTokenHitsBoth(t *testing.T) {
 		if _, ok := by[m]; !ok {
 			t.Errorf("shared Atlassian token should trigger %s: %+v", m, by)
 		}
+	}
+	if _, ok := by["atlassian"]; ok {
+		t.Errorf("fully-validatable token should not also surface the atlassian info match: %+v", by)
+	}
+}
+
+// A bare Atlassian token (no email/site to validate with) should still be typed
+// as atlassian with guidance, not dropped or left unknown.
+func TestAtlassianBareTokenInfo(t *testing.T) {
+	by := modulesOf(recognize.Recognize(parse.Parse("ATLASSIAN_API_TOKEN=ATATT3abc-_def1234567\n", ".env"), "", module.Default))
+	m, ok := by["atlassian"]
+	if !ok {
+		t.Fatalf("bare atlassian token not typed: %+v", by)
+	}
+	if m.Secret != "ATATT3abc-_def1234567" {
+		t.Errorf("atlassian secret wrong: %q", m.Secret)
+	}
+	// Driving the module yields the read-only guidance finding (no network).
+	got := driveModule(t, "atlassian", module.Fields{"token": m.Secret}, http.NewServeMux())
+	if got["atlassian token"].Flag != module.FlagCantCharacterize {
+		t.Errorf("atlassian info finding missing/wrong: %+v", got)
 	}
 }
 

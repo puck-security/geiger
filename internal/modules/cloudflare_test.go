@@ -40,6 +40,22 @@ func TestCloudflareRecognizer(t *testing.T) {
 	}
 }
 
+func TestCloudflareScopedTokenStillLive(t *testing.T) {
+	// A zone-scoped token 401s on the user-scoped /user/tokens/verify but is live
+	// against /zones — it must be characterized, not declared DEAD.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/client/v4/user/tokens/verify", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) })
+	mux.HandleFunc("/client/v4/accounts", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403) })
+	mux.HandleFunc("/client/v4/zones", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"result":[{"id":"z1"}],"result_info":{"total_count":7}}`)
+	})
+	mux.HandleFunc("/client/v4/user", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) })
+	got := driveModule(t, "cloudflare", module.Fields{"token": "ZONESCOPED"}, mux)
+	if got["zones"].Value != "7" {
+		t.Errorf("zone-scoped token should be live with zones, not DEAD: %+v", got)
+	}
+}
+
 func TestCloudflareRecon(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/client/v4/user/tokens/verify", func(w http.ResponseWriter, r *http.Request) {
