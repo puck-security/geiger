@@ -613,6 +613,7 @@ func usage() {
   geiger a.env b.env services/    # multiple files/dirs at once
   geiger --live --intrusive --only databases ./repo   # deepen just DB creds
   geiger --from-gitleaks report.json
+  nuclei -t exposures/ -l targets.txt -j -irr | geiger --from-nuclei - --live
   aws configure export-credentials | geiger
 
 flags:
@@ -632,6 +633,7 @@ flags:
   --color MODE        auto|always|never (default auto; off when piped)
   --from-gitleaks F   triage each finding in a gitleaks JSON report
   --from-trufflehog F triage each finding in a TruffleHog v3 JSON report
+  --from-nuclei F     triage each value from a nuclei JSONL (-j) scan; F=- reads stdin
   --json              machine-readable output
   --stream            stream results as found (discovery order), not sorted by impact
   --no-reverse        keep highest-impact first (default reverses to the bottom on a TTY)
