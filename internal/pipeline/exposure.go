@@ -33,6 +33,17 @@ func classifyExposure(path string) (class, note string, flag module.FlagLevel) {
 	case strings.HasPrefix(path, "gitleaks:"), strings.HasPrefix(path, "trufflehog:"):
 		return "scanner finding", "from a secret-scanner report — confirm the on-disk source", module.FlagInfo
 
+	// A nuclei matched-at is a URL, not a filesystem path: the secret was served
+	// over HTTP. Checked before the path-based classes below so a web URL like
+	// /.git/config or /logs/app.log reads as internet-exposed, not a git object
+	// or log file. A secret reachable by anyone who can hit the URL is a worse
+	// exposure than the same value in a local file — assume mass scanners already
+	// have it.
+	case strings.HasPrefix(p, "http://"), strings.HasPrefix(p, "https://"):
+		return "internet-exposed endpoint",
+			"served over HTTP — reachable by anyone who can hit the URL; assume already harvested by mass scanners",
+			module.FlagWarn
+
 	case strings.Contains(p, "/crashpad/"), strings.Contains(p, "/cores/"),
 		hasSuffixAny(base, ".dmp", ".mdmp", ".hprof", ".core"), strings.HasPrefix(base, "core."):
 		return "crash dump",
