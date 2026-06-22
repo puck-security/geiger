@@ -88,6 +88,15 @@ geiger --live ./leaked-repo
 geiger --live --from-trufflehog trufflehog.json
 geiger --live --from-gitleaks gitleaks-report.json
 
+# external recon: pipe a nuclei exposure scan straight in. Its templates pull the
+# leaked value out of each exposed endpoint (/.env, phpinfo, instance metadata);
+# geiger types, validates, and ranks it, and records the URL it leaked from. It
+# also parses the response body when present, reassembling multi-field creds (an
+# AWS key+secret pair, a connection string) the flat extracted-results can't —
+# run nuclei with -irr to include the body.
+# Stream over a pipe so live secrets never land on disk (add -o only if you must).
+nuclei -t exposures/ -l targets.txt -j -irr | geiger --live --from-nuclei -
+
 # rank by YOUR crown jewels (boost anything touching these to HIGH+)
 geiger --live --context '1234567890,acme-prod,billing-service' ./repo
 
@@ -132,9 +141,9 @@ geiger --ssh-correlate ~/.ssh
 ## Where geiger fits
 
 geiger is not a scanner — it starts where they stop. Detection finds the secret;
-geiger triages it. Point gitleaks or TruffleHog at the haystack, then pipe the
-report in (`--from-gitleaks` / `--from-trufflehog`) to learn which hits actually
-reach prod.
+geiger triages it. Point gitleaks or TruffleHog at the haystack, or nuclei at
+internet-exposed endpoints, then pipe the report in (`--from-gitleaks` /
+`--from-trufflehog` / `--from-nuclei -`) to learn which hits actually reach prod.
 
 | | gitleaks | TruffleHog | GitGuardian | **geiger** |
 |---|:---:|:---:|:---:|:---:|
@@ -179,6 +188,7 @@ answers the question they leave open: *now that you found it, how bad is it?*
 | `--no-reverse` | keep highest-impact findings first; by default an interactive terminal reverses them to the bottom (above the summary) so the worst don't scroll off the top |
 | `--only TYPES` / `--skip TYPES` | scope by module name or category (`databases`,`cloud`,`secrets`,`ai`,`vcs`,`kubernetes`,`identity`,`backup`,`endpoint`) |
 | `--from-gitleaks F` / `--from-trufflehog F` | triage each finding in a scanner report |
+| `--from-nuclei F` | triage each value extracted by a nuclei JSONL (`-j`) scan; `F` = `-` reads stdin (stream over a pipe) |
 | `--ssh-correlate` | SSH: read local hints for candidate target hosts |
 | `--trace` | print the raw request + response of each call (secrets masked) |
 | `--user-agent UA` | User-Agent for recon calls (default `geiger/<version>`) |

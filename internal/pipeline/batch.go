@@ -208,6 +208,33 @@ type gitleaksFinding struct {
 	File   string `json:"File"`
 }
 
+// nucleiFinding is the subset of a nuclei JSONL result we consume. nuclei's
+// detection templates locate where a secret leaks (an exposed /.env, phpinfo,
+// instance metadata) and pull the literal value(s) into extracted-results;
+// geiger re-types and validates each value itself. We also consume the raw
+// response body when present: it's a superset of extracted-results and lets
+// geiger's parsers reassemble multi-field credentials (an AWS key+secret pair, a
+// ~/.aws/credentials INI, a connection string) that the flat value array can't.
+type nucleiFinding struct {
+	TemplateID       string   `json:"template-id"`
+	MatchedAt        string   `json:"matched-at"`
+	ExtractedResults []string `json:"extracted-results"`
+	Response         string   `json:"response"`
+}
+
+// nucleiBody returns the body of nuclei's raw `response` field (status line +
+// headers + blank line + body). Returns "" when there's no body, so the caller
+// falls back to the extracted values.
+func nucleiBody(raw string) string {
+	if _, body, ok := strings.Cut(raw, "\r\n\r\n"); ok {
+		return body
+	}
+	if _, body, ok := strings.Cut(raw, "\n\n"); ok {
+		return body
+	}
+	return "" // no header/body separator — nothing reliable to ingest
+}
+
 // trufflehogFinding is the subset of a TruffleHog v3 JSON finding we consume.
 // TruffleHog emits newline-delimited JSON (one object per line).
 type trufflehogFinding struct {
@@ -241,7 +268,7 @@ func FromTrufflehog(path string) ([]Source, error) {
 	var findings []trufflehogFinding
 	if json.Unmarshal(data, &findings) != nil {
 		// fall back to newline-delimited JSON
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || !strings.HasPrefix(line, "{") {
 				continue
@@ -276,6 +303,75 @@ func FromTrufflehog(path string) ([]Source, error) {
 			b.Lines[secret] = line // best-effort line carry-through
 		}
 		out = append(out, Source{Label: label, Blob: b})
+	}
+	return out, nil
+}
+
+// FromNuclei ingests nuclei JSONL output (the `-j`/`-jsonl` stream, or a JSON
+// array) and yields one Source per extracted credential value. nuclei casts the
+// wide net — its templates extract any value that *looks* like a secret from an
+// exposed endpoint — and geiger is the authority: each value flows through the
+// same recognizer as every other source, so over-matches that aren't real
+// credentials are dropped here. path "-" reads stdin, so the intended use is a
+// streaming pipe (`nuclei … -j | geiger --from-nuclei - --live`) that never
+// lands secrets on disk. The matched-at URL becomes the Source label, which
+// drives the title provenance ("from https://host/.env"), the cross-source
+// dedup/"also exposed in" rollup (one key exposed at many URLs collapses to one
+// finding), and the internet-exposed-endpoint exposure class.
+func FromNuclei(path string) ([]Source, error) {
+	var data []byte
+	if path == "-" {
+		b, err := io.ReadAll(io.LimitReader(os.Stdin, 32<<20)) // cap at 32 MiB
+		if err != nil {
+			return nil, err
+		}
+		data = b
+	} else {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		data = b
+	}
+	var findings []nucleiFinding
+	if json.Unmarshal(data, &findings) != nil {
+		// fall back to newline-delimited JSON (the default -j stream)
+		findings = findings[:0]
+		for line := range strings.SplitSeq(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || !strings.HasPrefix(line, "{") {
+				continue
+			}
+			var f nucleiFinding
+			if json.Unmarshal([]byte(line), &f) == nil {
+				findings = append(findings, f)
+			}
+		}
+	}
+	var out []Source
+	for _, f := range findings {
+		label := f.MatchedAt
+		if label == "" {
+			label = "nuclei:" + f.TemplateID
+		}
+		// Prefer the full response body: it's a superset of extracted-results and
+		// lets geiger reassemble multi-field credentials. Then add only those
+		// extracted values not already in the body (e.g. a value a template pulled
+		// from a response header). When there's no body, fall back to the values.
+		if body := nucleiBody(f.Response); strings.TrimSpace(body) != "" {
+			out = append(out, Source{Label: label, Blob: parse.Parse(body, label)})
+			for _, v := range f.ExtractedResults {
+				if v = strings.TrimSpace(v); v != "" && !strings.Contains(body, v) {
+					out = append(out, Source{Label: label, Blob: parse.Parse(v, label)})
+				}
+			}
+			continue
+		}
+		for _, v := range f.ExtractedResults {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, Source{Label: label, Blob: parse.Parse(v, label)})
+			}
+		}
 	}
 	return out, nil
 }

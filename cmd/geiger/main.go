@@ -34,7 +34,7 @@ var version = "dev"
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
 	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse, useMetadata bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, contextTerms, colorMode, only, skip                              string
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                  string
 	userAgent, minSeverity, output                                                                                  string
 	timeout                                                                                                         time.Duration
 	concurrency, minSevRank                                                                                         int
@@ -53,6 +53,7 @@ func main() {
 	flag.StringVar(&c.proxy, "proxy", "", "route HTTP recon through a proxy (http/https/socks5 URL)")
 	flag.StringVar(&c.fromGitleaks, "from-gitleaks", "", "ingest a gitleaks JSON report and triage each finding")
 	flag.StringVar(&c.fromTrufflehog, "from-trufflehog", "", "ingest a TruffleHog v3 JSON report and triage each finding")
+	flag.StringVar(&c.fromNuclei, "from-nuclei", "", "ingest nuclei JSONL (-j) output and triage each extracted value; '-' reads stdin")
 	flag.StringVar(&c.contextTerms, "context", "", "comma-separated crown-jewel terms (account ids, prod hosts, critical repos) that raise a credential's tier when matched")
 	flag.BoolVar(&c.correlate, "ssh-correlate", false, "for SSH keys, read local hints (~/.ssh/config, known_hosts, shell history) to list candidate target hosts")
 	flag.BoolVar(&c.trace, "trace", false, "print the raw request and response of each call (secrets masked); implies showing all calls")
@@ -275,6 +276,8 @@ func header(c config) string {
 		target = "gitleaks report " + c.fromGitleaks
 	case c.fromTrufflehog != "":
 		target = "trufflehog report " + c.fromTrufflehog
+	case c.fromNuclei != "":
+		target = "nuclei JSONL " + c.fromNuclei
 	case len(c.args) > 0:
 		target = "scanning " + c.args[0]
 	}
@@ -671,6 +674,9 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 	}
 	if c.fromTrufflehog != "" {
 		return pipeline.FromTrufflehog(c.fromTrufflehog)
+	}
+	if c.fromNuclei != "" {
+		return pipeline.FromNuclei(c.fromNuclei)
 	}
 	if len(c.args) > 0 {
 		// Multiple paths (files, dirs, or scanner reports) are merged, so a deeper

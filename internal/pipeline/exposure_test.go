@@ -22,8 +22,11 @@ func TestClassifyExposure(t *testing.T) {
 		{"/proj/.git/objects/ab/cdef", "git object", module.FlagInfo},
 		{"harvested via ai_ide_store: vscdb:cursorAuth/accessToken", "harvested secret", module.FlagInfo},
 		{"trufflehog:GitHub", "scanner finding", module.FlagInfo},
-		{"/proj/.env", "", module.FlagInfo},               // ordinary file → no class
-		{"/proj/config/settings.py", "", module.FlagInfo}, // ordinary file → no class
+		{"https://victim.example/.env", "internet-exposed endpoint", module.FlagWarn},        // nuclei matched-at URL
+		{"http://victim.example/logs/app.log", "internet-exposed endpoint", module.FlagWarn}, // URL beats the .log/logs class
+		{"https://victim.example/.git/config", "internet-exposed endpoint", module.FlagWarn}, // URL beats the git-object class
+		{"/proj/.env", "", module.FlagInfo},                                                  // ordinary file → no class
+		{"/proj/config/settings.py", "", module.FlagInfo},                                    // ordinary file → no class
 	}
 	for _, c := range cases {
 		class, note, flag := classifyExposure(c.path)
