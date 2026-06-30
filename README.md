@@ -129,11 +129,15 @@ geiger --live --intrusive .env
 ```
 
 **SSH keys** — point it at a directory; it fingerprints each key (encrypted keys
-are *locked*, not dead). `--ssh-correlate` lists candidate target hosts from
-`~/.ssh/config`, `known_hosts`, and shell history.
+are *locked*, not dead). With `--live` it confirms the key's main use — git access
+— by attempting an SSH login to GitHub/GitLab/Bitbucket and reporting the account
+it authenticates as (or the repo, for a deploy key); a user key that logs in means
+pull/push to that account's private repos (supply-chain risk). `--ssh-correlate`
+adds candidate target hosts from `~/.ssh/config`, `known_hosts`, and shell history.
 
 ```sh
-geiger --ssh-correlate ~/.ssh
+geiger --live ~/.ssh            # fingerprint + test GitHub/GitLab/Bitbucket access
+geiger --ssh-correlate ~/.ssh   # + guess other target hosts from local hints
 ```
 
 ---
@@ -452,7 +456,7 @@ a force multiplier; a billed-usage API key is a warning.
 
 | Credential / app | Reach |
 |---|---|
-| `ssh_private_key` | SSH private key — local fingerprint only |
+| `ssh_private_key` | SSH private key — fingerprint; `--live` tests GitHub/GitLab/Bitbucket access + identity |
 | `kubeconfig` | kubeconfig — cluster credential |
 | `firefox_logins` | Firefox saved logins — offline-decrypted when no primary password |
 | `jwt` | decoded offline — map issuer to its provider for live recon |

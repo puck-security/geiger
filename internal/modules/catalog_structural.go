@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/puck-security/geiger/internal/dbrecon"
 	"github.com/puck-security/geiger/internal/module"
@@ -275,7 +276,7 @@ type sshKey struct{ module.Base }
 
 func (sshKey) Name() string { return "ssh_private_key" }
 
-func (sshKey) Recon(_ context.Context, c *recon.Client, _ module.Token, f module.Fields) ([]module.Finding, error) {
+func (sshKey) Recon(ctx context.Context, c *recon.Client, _ module.Token, f module.Fields) ([]module.Finding, error) {
 	raw := []byte(f["key"])
 	var out []module.Finding
 
@@ -318,16 +319,131 @@ func (sshKey) Recon(_ context.Context, c *recon.Client, _ module.Token, f module
 			}
 		}
 	}
-	out = append(out, module.Finding{
-		Key:   "host acceptance",
-		Value: "which hosts accept this key needs a login attempt (excluded)",
-		Flag:  module.FlagCantCharacterize,
-	})
+	// The key's #1 use is git remotes, so on --live confirm whether it actually
+	// authenticates to the major git hosts and surface the account it logs in as.
+	switch {
+	case signer != nil && c.Live():
+		out = append(out, sshGitProbe(ctx, signer)...)
+	case signer == nil:
+		out = append(out, module.Finding{Key: "host acceptance",
+			Value: "can't test host access — key is locked (needs the passphrase)", Flag: module.FlagCantCharacterize})
+	default:
+		out = append(out, module.Finding{Key: "host acceptance",
+			Value: "re-run with --live to test GitHub/GitLab/Bitbucket access", Flag: module.FlagCantCharacterize})
+	}
 	return out, nil
 }
 
 func (sshKey) Summarize(title string, fs []module.Finding) module.Note {
-	return module.Note{Title: title, Findings: fs, Summary: "SSH private key — local fingerprint only"}
+	n := module.Note{Title: title, Findings: fs, Summary: "SSH private key — local fingerprint only"}
+	for _, f := range fs {
+		if f.Key == "reach" || strings.Contains(f.Value, "authenticated as") {
+			n.Summary = "SSH private key — confirmed git host access"
+			break
+		}
+	}
+	return n
+}
+
+// gitSSHHosts are the well-known git-over-SSH endpoints whose post-auth banner
+// reveals the account, letting us confirm a key's primary use (repo access).
+var gitSSHHosts = []string{"github.com", "gitlab.com", "bitbucket.org"}
+
+// sshGitProbe attempts an SSH login with the key against each git host and
+// reports which accept it and as whom. Read-only (an auth test — no repo writes),
+// but it is a real, logged login from this host; gated behind --live by the
+// caller.
+func sshGitProbe(ctx context.Context, signer ssh.Signer) []module.Finding {
+	var out []module.Finding
+	userKey := false
+	for _, h := range gitSSHHosts {
+		accepted, banner, transportErr := probeGitHost(ctx, signer, h+":22")
+		if transportErr || !accepted {
+			continue
+		}
+		id, deploy := gitIdentity(h, banner)
+		val := "authenticated"
+		switch {
+		case deploy:
+			val = "authenticated as deploy key for " + id
+		case id != "":
+			val = "authenticated as " + id
+			userKey = true
+		}
+		out = append(out, module.Finding{Key: h, Value: val, Flag: module.FlagWarn})
+	}
+	if userKey {
+		out = append(out, module.Finding{Key: "reach",
+			Value: "git push access — read private source and push commits to any repo this account can write (supply-chain risk)",
+			Flag:  module.FlagForceMultiplier})
+	}
+	if len(out) == 0 {
+		out = append(out, module.Finding{Key: "host acceptance",
+			Value: "not accepted by GitHub/GitLab/Bitbucket (key may target another host)", Flag: module.FlagInfo})
+	}
+	return out
+}
+
+// probeGitHost dials addr and attempts public-key auth as "git". A successful
+// handshake proves the host accepts the key; the session banner carries the
+// identity. A 401-equivalent auth rejection is "not accepted" (the host was
+// reached); a dial/handshake failure is a transport error (no verdict on the
+// key). Host-key verification is intentionally relaxed for this recon probe —
+// pinning would break on the providers' key rotations; the auth result, not the
+// channel's confidentiality, is what we report.
+func probeGitHost(ctx context.Context, signer ssh.Signer, addr string) (accepted bool, banner string, transportErr bool) {
+	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, err := recon.GuardedDial(dctx, "tcp", addr)
+	if err != nil {
+		return false, "", true
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	cfg := &ssh.ClientConfig{
+		User:            "git",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	sc, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		if strings.Contains(err.Error(), "unable to authenticate") || strings.Contains(err.Error(), "no supported methods") {
+			return false, "", false // reached the host; key rejected
+		}
+		return false, "", true // handshake/transport failure — not a verdict on the key
+	}
+	client := ssh.NewClient(sc, chans, reqs)
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		return true, "", false // authenticated; couldn't open a session for the banner
+	}
+	defer sess.Close()
+	// git hosts print an identity banner then exit non-zero; CombinedOutput
+	// captures it (and ignores the expected non-zero exit).
+	b, _ := sess.CombinedOutput("")
+	return true, string(b), false
+}
+
+// gitIdentity pulls the account (or deploy-key "owner/repo") out of each host's
+// post-auth banner.
+func gitIdentity(host, banner string) (id string, deploy bool) {
+	switch host {
+	case "github.com":
+		if m := regexp.MustCompile(`Hi ([^!]+)!`).FindStringSubmatch(banner); m != nil {
+			id = strings.TrimSpace(m[1])
+			deploy = strings.Contains(id, "/") // deploy keys read "Hi owner/repo!"
+		}
+	case "gitlab.com":
+		if m := regexp.MustCompile(`Welcome to GitLab, @?([^!]+)!`).FindStringSubmatch(banner); m != nil {
+			id = strings.TrimSpace(m[1])
+		}
+	case "bitbucket.org":
+		if m := regexp.MustCompile(`(?:logged in as|authenticated as) ([^\s.,!]+)`).FindStringSubmatch(banner); m != nil {
+			id = strings.TrimSpace(m[1])
+		}
+	}
+	return id, deploy
 }
 
 func recognizeSSH(b parse.Blob, _ string, _ *module.Registry) []recognize.Match {
