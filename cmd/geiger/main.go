@@ -245,7 +245,7 @@ func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipelin
 // printResult renders one credential's note (or its JSON line) to w.
 func printResult(w io.Writer, r pipeline.Result, ctx score.Context, c config, leadingBlank bool) {
 	if c.asJSON {
-		fmt.Fprintln(w, note.JSON(r.Note))
+		fmt.Fprintln(w, note.JSON(r.Note, ctx))
 		return
 	}
 	if leadingBlank {

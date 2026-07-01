@@ -9,6 +9,7 @@ import (
 
 	"github.com/puck-security/geiger/internal/color"
 	"github.com/puck-security/geiger/internal/module"
+	"github.com/puck-security/geiger/internal/score"
 )
 
 // Sanitize neutralizes control/ANSI sequences and caps length on any string
@@ -117,6 +118,8 @@ func orDash(s, alt string) string {
 // jsonNote is the machine-readable shape.
 type jsonNote struct {
 	Title    string        `json:"title"`
+	Tier     string        `json:"tier"`
+	Score    int           `json:"score"`
 	Invalid  bool          `json:"invalid"`
 	Reason   string        `json:"reason,omitempty"`
 	Summary  string        `json:"summary,omitempty"`
@@ -145,9 +148,11 @@ func flagName(fl module.FlagLevel) string {
 	}
 }
 
-// JSON renders a Note as a JSON object.
-func JSON(n module.Note) string {
-	jn := jsonNote{Title: sanitize(n.Title), Invalid: n.Invalid, Reason: sanitize(n.Reason), Summary: sanitize(n.Summary), Findings: []jsonFinding{}}
+// JSON renders a Note as a JSON object. The blast-radius tier and score are
+// computed here (from the same score.Context the text renderer uses) so the
+// machine shape is self-contained and downstream consumers don't re-derive them.
+func JSON(n module.Note, ctx score.Context) string {
+	jn := jsonNote{Title: sanitize(n.Title), Tier: string(score.TierFor(n, ctx)), Score: score.BlastRadius(n, ctx), Invalid: n.Invalid, Reason: sanitize(n.Reason), Summary: sanitize(n.Summary), Findings: []jsonFinding{}}
 	for _, f := range n.Findings {
 		var detail []string
 		for _, d := range f.Detail {
