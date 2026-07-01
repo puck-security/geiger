@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
+	"github.com/puck-security/geiger/internal/score"
 )
 
 func TestTextDetailOnlyInVerbose(t *testing.T) {
@@ -29,7 +30,7 @@ func TestTextDetailOnlyInVerbose(t *testing.T) {
 		t.Errorf("Detail paths missing from verbose output:\n%s", v)
 	}
 	// JSON always carries the full Detail.
-	j := JSON(n)
+	j := JSON(n, score.Context{})
 	if !strings.Contains(j, "\"detail\":[") || !strings.Contains(j, "2.py") {
 		t.Errorf("JSON detail missing:\n%s", j)
 	}
@@ -69,9 +70,25 @@ func TestJSON(t *testing.T) {
 		Title:    "T",
 		Summary:  "s",
 		Findings: []module.Finding{{Key: "k", Value: "v", Flag: module.FlagForceMultiplier}},
-	})
+	}, score.Context{})
 	if !strings.Contains(out, `"flag":"force_multiplier"`) || !strings.Contains(out, `"key":"k"`) {
 		t.Errorf("json wrong: %s", out)
+	}
+	// The machine shape must carry the blast-radius tier + score so JSON
+	// consumers don't have to re-derive them from the flag fields.
+	if !strings.Contains(out, `"tier":"`) || !strings.Contains(out, `"score":`) {
+		t.Errorf("json missing tier/score: %s", out)
+	}
+	// A force-multiplier finding must not score as INFO/DEAD.
+	if strings.Contains(out, `"score":0`) {
+		t.Errorf("force-multiplier finding scored 0: %s", out)
+	}
+}
+
+func TestJSONInvalidIsDeadTier(t *testing.T) {
+	out := JSON(module.Note{Title: "X", Invalid: true, Reason: "401 expired"}, score.Context{})
+	if !strings.Contains(out, `"invalid":true`) || !strings.Contains(out, `"tier":"DEAD"`) {
+		t.Errorf("invalid note must render tier DEAD: %s", out)
 	}
 }
 
