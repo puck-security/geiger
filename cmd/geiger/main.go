@@ -359,7 +359,7 @@ func wantColor(mode string, asJSON bool) bool {
 // --only/--skip (and the deepen hint) can speak in categories, not 100+ names.
 var categoryModules = map[string][]string{
 	"databases":  {"db_connection_string", "snowflake", "planetscale", "neon", "aiven", "upstash", "redis_cloud", "clickhouse_cloud", "clickhouse_selfhosted", "supabase", "mongodb_atlas", "databricks"},
-	"cloud":      {"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "gcp_metadata", "azure_msal", "entra_sp", "alibaba", "oci_instance_principal", "digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "bedrock", "heroku", "render", "railway", "flyio", "vercel", "netlify", "fastly"},
+	"cloud":      {"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "gcp_metadata", "azure_msal", "entra_sp", "alibaba", "oci_instance_principal", "digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "bedrock", "heroku", "render", "railway", "flyio", "vercel", "netlify", "fastly", "filestack"},
 	"secrets":    {"vault", "onepassword_connect", "onepassword_sa", "onepassword_secret_key", "doppler", "conjur", "cyberark_pvwa", "keepass_db", "bitwarden", "bitwarden_vault", "vault_export_plaintext", "infisical", "akeyless", "delinea_secret_server"},
 	"ai":         {"openai", "anthropic", "cohere", "mistral", "replicate", "huggingface", "gemini", "azure_openai", "groq", "together", "deepseek", "elevenlabs", "stability", "pinecone", "perplexity", "openrouter", "xai", "fireworks", "claude_code_oauth", "bedrock"},
 	"vcs":        {"github_pat", "gitlab", "gitlab_ci_token"},
