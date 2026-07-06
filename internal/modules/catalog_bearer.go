@@ -51,9 +51,16 @@ func init() {
 		Whoami: r.GET("/user").Field("email", "email").Field("full_name", "full_name"),
 		Calls: []r.Call{
 			r.GET("/sites").CountArray("", "sites"),
+			// Team + role: an Owner PAT is account admin (manage members, all sites).
+			r.GET("/accounts").Field("team", "0.name").Signal(r.Signal{Path: "0.role", Contains: "Owner",
+				Key: "role", Value: "team Owner — account admin: manage members, all sites, all secrets", Flag: fmFlag}),
 			{Path: "/sites?per_page=1", Signals: []r.Signal{{Path: "0.id", Regex: ".+", Key: "build env",
 				Value: "site build env vars (often secrets) readable; can deploy", Flag: fmFlag}}},
 		},
+		// The structural hazard: Netlify tokens have no read-only or per-site scope.
+		Static: []module.Finding{{Key: "scope",
+			Value: "unscoped — Netlify has no read-only or per-site tokens, so this carries the owner's full account privilege: create/delete sites, read/write env vars & secrets, change access controls",
+			Flag:  fmFlag}},
 	}.Module())
 
 	add("", r.HTTP{
