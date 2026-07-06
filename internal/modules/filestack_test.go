@@ -53,11 +53,13 @@ func TestFilestackReconSecurityDisabled(t *testing.T) {
 		respond(w, `{"error":"File not found"}`)
 	})
 	got := driveModule(t, "filestack", module.Fields{"apikey": "APIKEY"}, mux)
-	if got["security"].Flag != module.FlagForceMultiplier {
-		t.Errorf("security-disabled should be a force multiplier: %+v", got["security"])
+	// A public api key on a security-off app is a misconfiguration (warn/MEDIUM),
+	// not a crown-jewel secret (force multiplier).
+	if got["security"].Flag != module.FlagWarn {
+		t.Errorf("security-disabled should be warn, not force-multiplier: %+v", got["security"])
 	}
 	if got["capability"].Flag != module.FlagWarn {
-		t.Errorf("expected a capability finding: %+v", got)
+		t.Errorf("capability should be warn when security is off: %+v", got)
 	}
 }
 

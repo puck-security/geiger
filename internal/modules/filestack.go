@@ -93,33 +93,42 @@ func (m filestack) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 	apikey, secret := f["apikey"], f["secret"]
 	c.RegisterSecret(apikey)
 	c.RegisterSecret(secret)
-	var out []module.Finding
-
-	// Capability is inherent to a live Filestack api key — state it regardless of
-	// what the probe can introspect.
-	out = append(out, module.Finding{Key: "capability",
-		Value: "upload files, run transforms, and fetch+process remote URLs (SSRF vector) — billed to and served from cdn.filestackcontent.com under this account",
-		Flag:  module.FlagWarn})
 
 	// Probe validity + whether the app's Security feature is on. An unsigned
 	// metadata read on a nonexistent handle: if the app accepts it (404, not a
-	// policy demand) Security is off and the api key alone is dangerous.
+	// policy demand) Security is off; a 401/"invalid apikey" means it's dead.
 	req, _ := recon.NewRequest(ctx, http.MethodGet, filestackHost+"/api/file/"+filestackSentinel+"/metadata?key="+apikey, nil)
 	resp, err := c.Do(req, recon.CallOpts{})
-	if err != nil {
-		return out, nil
-	}
-	if !resp.DryRun {
+	securityOff, known := false, false
+	if err == nil && !resp.DryRun {
 		body := strings.ToLower(string(resp.Body))
 		switch {
 		case resp.Status == http.StatusUnauthorized, badFilestackKey(resp.Status, body):
-			// api key not recognized → nothing else is live.
-			return nil, errStatus(resp.Status)
+			return nil, errStatus(resp.Status) // api key not recognized → dead
 		case resp.Status == http.StatusForbidden || strings.Contains(body, "policy") || strings.Contains(body, "signature"):
-			out = append(out, module.Finding{Key: "security", Value: "enabled — unsigned operations require the app secret (api key alone is limited)", Flag: module.FlagInfo})
+			known = true // Security on: the unsigned op was refused
 		default:
-			// the unsigned read was accepted → Security is off.
-			out = append(out, module.Finding{Key: "security", Value: "DISABLED — the api key alone allows uploads, transforms, and remote-URL fetch (no signature needed)", Flag: module.FlagForceMultiplier})
+			securityOff, known = true, true // unsigned read accepted → Security off
+		}
+	}
+
+	// A Filestack api key is a PUBLIC client identifier by design — it ships in
+	// front-end JS. So it's only notable when the app's Security feature is off (a
+	// misconfiguration), where the public key alone enables real abuse. The app
+	// secret (below) is the actual high-value credential.
+	var out []module.Finding
+	capFlag := module.FlagInfo
+	if securityOff {
+		capFlag = module.FlagWarn
+	}
+	out = append(out, module.Finding{Key: "capability",
+		Value: "public client key — upload files, run transforms, and fetch+process remote URLs (SSRF vector), billed to and served from cdn.filestackcontent.com under this account",
+		Flag:  capFlag})
+	if known {
+		if securityOff {
+			out = append(out, module.Finding{Key: "security", Value: "DISABLED (app misconfiguration) — the public api key alone allows uploads, transforms, and remote-URL fetch; no signature needed", Flag: module.FlagWarn})
+		} else {
+			out = append(out, module.Finding{Key: "security", Value: "enabled — operations require the app secret; the public api key alone is limited", Flag: module.FlagInfo})
 		}
 	}
 
