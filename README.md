@@ -140,6 +140,20 @@ geiger --live ~/.ssh            # fingerprint + test GitHub/GitLab/Bitbucket acc
 geiger --ssh-correlate ~/.ssh   # + guess other target hosts from local hints
 ```
 
+**Browser extensions** — `--browser` models the impact of a malicious Chrome/Edge
+extension (CursedChrome-style proxy, infostealer, sideloaded MV3). It scores each
+installed extension's permission union — `cookies` + broad host access + request
+interception / script injection / proxy = read every site's session cookies and
+pivot through the browser — and flags sideloaded/unpacked ones (unsigned, not
+content-verified). With `--live --intrusive` it also inventories the live sessions
+such an extension would reach from the Cookies store *metadata* (domains only — the
+values are keychain-encrypted), ranked by blast radius (IdP/SSO sessions first).
+
+```sh
+geiger --browser                    # score installed extensions' reach
+geiger --browser --live --intrusive # + inventory the live sessions they'd hijack
+```
+
 ---
 
 ## Where geiger fits

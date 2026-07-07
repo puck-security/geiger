@@ -412,6 +412,11 @@ func FromGitleaks(path string) ([]Source, error) {
 	return out, nil
 }
 
+// ResultFromNote wraps a pre-built Note (e.g. from the browser scanner, which
+// produces capability/blast-radius findings rather than recognized credentials)
+// as a Result so it flows through the same sort/tier/print path.
+func ResultFromNote(n module.Note) Result { return Result{Note: n} }
+
 // SortBySeverity orders results by composite blast-radius score so the highest-
 // impact (and any crown-jewel context match) surface first, invalids last.
 func SortBySeverity(rs []Result, ctx score.Context) {

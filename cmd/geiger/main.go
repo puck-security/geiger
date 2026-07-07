@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/puck-security/geiger/internal/browser"
 	"github.com/puck-security/geiger/internal/color"
 	"github.com/puck-security/geiger/internal/imds"
 	"github.com/puck-security/geiger/internal/note"
@@ -33,12 +34,12 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse, useMetadata bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                  string
-	userAgent, minSeverity, output                                                                                  string
-	timeout                                                                                                         time.Duration
-	concurrency, minSevRank                                                                                         int
-	args                                                                                                            []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse, useMetadata, browser bool
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                           string
+	userAgent, minSeverity, output                                                                                           string
+	timeout                                                                                                                  time.Duration
+	concurrency, minSevRank                                                                                                  int
+	args                                                                                                                     []string
 }
 
 func main() {
@@ -49,6 +50,7 @@ func main() {
 	flag.BoolVar(&c.minFootprint, "min-footprint", false, "OPSEC: run only the identity (whoami) call per credential, skip inventory fan-out")
 	flag.BoolVar(&c.useEnv, "env", false, "read credentials from the current environment variables")
 	flag.BoolVar(&c.useMetadata, "metadata", false, "harvest cloud instance-metadata credentials (AWS/GCP/Azure/k8s/…) and triage them (requires --live)")
+	flag.BoolVar(&c.browser, "browser", false, "model malicious-browser-extension impact: score installed Chrome/Edge extensions' permissions and (with --live --intrusive) inventory the live sessions they'd reach")
 	flag.StringVar(&c.endpoint, "endpoint", "", "tenant/instance/host for set-shaped credentials")
 	flag.StringVar(&c.proxy, "proxy", "", "route HTTP recon through a proxy (http/https/socks5 URL)")
 	flag.StringVar(&c.fromGitleaks, "from-gitleaks", "", "ingest a gitleaks JSON report and triage each finding")
@@ -164,10 +166,24 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 		Select: c.selector(),
 	}
 
-	if c.stream {
-		return runStream(out, stderr, sources, opts, ctx, c)
+	// --browser produces Notes directly (extension capability + session reach),
+	// not recognized credentials, so inject them into the result stream.
+	var extra []pipeline.Result
+	if c.browser {
+		st.update("scanning browser profiles…")
+		for _, n := range browser.Scan(browser.Options{Intrusive: c.intrusive}) {
+			extra = append(extra, pipeline.ResultFromNote(n))
+		}
+		st.clear()
+		if !c.intrusive && !c.quiet {
+			fmt.Fprintln(stderr, "geiger: --browser scored installed extensions; re-run --live --intrusive to inventory the live sessions they'd reach.")
+		}
 	}
-	return runSorted(out, stderr, st, sources, opts, ctx, c)
+
+	if c.stream {
+		return runStream(out, stderr, sources, opts, ctx, c, extra)
+	}
+	return runSorted(out, stderr, st, sources, opts, ctx, c, extra)
 }
 
 // showResult reports whether a result clears the --min-severity threshold.
@@ -177,12 +193,13 @@ func (c config) showResult(r pipeline.Result, ctx score.Context) bool {
 
 // runSorted is the default: triage every source, then sort by blast radius so
 // the highest-impact credential prints first.
-func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, opts pipeline.Options, ctx score.Context, c config) int {
+func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, opts pipeline.Options, ctx score.Context, c config, extra []pipeline.Result) int {
 	bt := pipeline.NewBatch(gmodule.Default, opts)
 	results := bt.RunConcurrent(sources, nil, func(done int) {
 		st.update("triaging %d/%d", done, len(sources))
 	})
 	bt.AnnotateDuplicates(results) // note any secret also found in other files
+	results = append(results, extra...)
 	st.clear()
 	if len(results) == 0 {
 		if !c.quiet {
@@ -219,7 +236,7 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 // including the rotate-first queue — is still computed across everything, so the
 // "what to fix first" takeaway survives the loss of ordering. No recon progress
 // line here: the streamed results are the feedback.
-func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipeline.Options, ctx score.Context, c config) int {
+func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipeline.Options, ctx score.Context, c config, extra []pipeline.Result) int {
 	bt := pipeline.NewBatch(gmodule.Default, opts)
 	printed := 0
 	all := bt.RunConcurrent(sources, func(r pipeline.Result) {
@@ -229,6 +246,13 @@ func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipelin
 		printResult(stdout, r, ctx, c, printed > 0)
 		printed++
 	}, nil)
+	for _, r := range extra { // browser Notes: print in discovery order too
+		if c.showResult(r, ctx) {
+			printResult(stdout, r, ctx, c, printed > 0)
+			printed++
+		}
+	}
+	all = append(all, extra...)
 	if len(all) == 0 {
 		if !c.quiet {
 			fmt.Fprintln(stderr, "geiger: no credentials recognized.")
@@ -270,6 +294,8 @@ func header(c config) string {
 	switch {
 	case c.useMetadata:
 		target = "instance metadata"
+	case c.browser:
+		target = "browser profiles"
 	case c.useEnv:
 		target = "environment"
 	case c.fromGitleaks != "":
@@ -624,6 +650,8 @@ flags:
   --min-footprint     OPSEC: identity call only, skip inventory fan-out
   --env               read current environment variables
   --metadata          harvest cloud instance-metadata creds (AWS/GCP/Azure/k8s/…); needs --live
+  --browser           model malicious-extension impact: score Chrome/Edge extensions;
+                      with --live --intrusive, inventory the live sessions they'd reach
   --endpoint URL      tenant/instance/host for set-shaped credentials
   --proxy URL         route HTTP recon through a proxy (http/https/socks5)
   --timeout DUR       per-credential recon timeout (default 15s)
@@ -680,6 +708,14 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 	}
 	if c.fromNuclei != "" {
 		return pipeline.FromNuclei(c.fromNuclei)
+	}
+	if c.browser && len(c.args) == 0 {
+		// --browser produces Notes directly (injected in run); with no file/stdin
+		// input there are no credential sources to read — don't fall through to the
+		// stdin-required guard below.
+		if fi, _ := os.Stdin.Stat(); fi.Mode()&os.ModeCharDevice != 0 {
+			return nil, nil
+		}
 	}
 	if len(c.args) > 0 {
 		// Multiple paths (files, dirs, or scanner reports) are merged, so a deeper
