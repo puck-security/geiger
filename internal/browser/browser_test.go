@@ -55,6 +55,44 @@ func TestScoreExtension(t *testing.T) {
 	}
 }
 
+func TestScanUnpackedFromDisk(t *testing.T) {
+	home := t.TempDir()
+	prof := filepath.Join(home, ".config", "google-chrome", "Default")
+	if err := os.MkdirAll(prof, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The unpacked extension's real folder + manifest.json — Chrome references it
+	// in place and does NOT copy the manifest into Preferences.
+	extDir := filepath.Join(home, "evil-ext")
+	os.MkdirAll(extDir, 0o755)
+	os.WriteFile(filepath.Join(extDir, "manifest.json"),
+		[]byte(`{"name":"Disk Unpacked","manifest_version":3,"permissions":["cookies"],"host_permissions":["<all_urls>"]}`), 0o600)
+	// Two unpacked entries with NO embedded manifest: one whose folder exists, one
+	// whose folder is gone. Both must still surface.
+	prefs := `{"extensions":{"settings":{
+		"aaaabbbbccccddddeeeeffffgggghhhh":{"location":4,"path":"` + extDir + `"},
+		"bbbbccccddddeeeeffffgggghhhhiiii":{"location":4,"path":"` + filepath.Join(home, "gone") + `"}}}}`
+	if err := os.WriteFile(filepath.Join(prof, "Preferences"), []byte(prefs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notes := Scan(Options{Home: home, GOOS: "linux"})
+	var fromDisk, unreadable bool
+	for _, n := range notes {
+		if strings.Contains(n.Title, "Disk Unpacked") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+			fromDisk = true
+		}
+		if strings.Contains(n.Title, "gone") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+			unreadable = true
+		}
+	}
+	if !fromDisk {
+		t.Errorf("unpacked extension with an on-disk manifest should be read + flagged: %+v", notes)
+	}
+	if !unreadable {
+		t.Errorf("unpacked extension with a missing folder should still be flagged (IOC): %+v", notes)
+	}
+}
+
 func TestWebStoreStatusSkipsNonStoreID(t *testing.T) {
 	// A path-derived / non-store id must not trigger a network call and must not
 	// be penalized (returns listed=true).

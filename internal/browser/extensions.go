@@ -36,21 +36,42 @@ func scanExtensions(p profile, live bool) []module.Note {
 		if state, ok := e["state"].(float64); ok && state == 0 {
 			continue // disabled
 		}
-		mani, _ := e["manifest"].(map[string]any)
-		if mani == nil {
-			continue
-		}
 		loc, _ := e["location"].(float64)
 		if int(loc) == 5 {
 			continue // component extension — the browser's own built-in code, not a threat vector
 		}
-		// Trust the Google-SIGNED verified_contents.json ONLY — not the
-		// from_webstore boolean (spoofable by anyone who can forge the Preferences
-		// MAC) and not the manifest's own update_url (attacker-controlled). Signed
-		// content verification is the one anchor an attacker can't forge.
+		// Webstore/installed extensions embed a manifest copy in Preferences.
+		// UNPACKED extensions (location 4/8) do NOT — Chrome references them in
+		// place — so read manifest.json from their on-disk path instead. Trust the
+		// Google-SIGNED verified_contents.json ONLY (not the spoofable from_webstore
+		// flag, not the attacker-controlled manifest update_url).
+		mani, _ := e["manifest"].(map[string]any)
+		path, _ := e["path"].(string)
+		if mani == nil && path != "" {
+			mani = readManifestFile(path)
+		}
 		verified := hasVerifiedContents(p.dir, id)
-		x := extractManifest(mani, id)
-		findings, risky, tr, summary := scoreExtension(x, loc, verified)
+		tr := trustLevel(loc, verified)
+
+		var findings []module.Finding
+		var risky bool
+		var summary, name string
+		switch {
+		case mani != nil:
+			x := extractManifest(mani, id)
+			name = x.name
+			findings, risky, tr, summary = scoreExtension(x, loc, verified)
+		case tr == trustSideloaded:
+			// Unpacked but manifest.json unreadable (folder moved/removed) — still an
+			// IOC: an unpacked extension is registered but its code isn't where Chrome
+			// expects it.
+			name = baseName(path, id)
+			findings = []module.Finding{{Key: "provenance",
+				Value: "unpacked/sideloaded — unsigned, NOT content-verified; manifest.json not readable (folder moved/removed?)", Flag: module.FlagForceMultiplier}}
+			risky, summary = true, "unpacked extension, manifest unreadable — verify why it's loaded"
+		default:
+			continue // no manifest and not sideloaded → nothing to report
+		}
 		if !risky {
 			benign++
 			continue
@@ -64,8 +85,12 @@ func scanExtensions(p profile, live bool) []module.Note {
 				summary = "installed extension NOT in the public Web Store — verify"
 			}
 		}
+		// The on-disk source of a sideloaded extension is a key IOC.
+		if path != "" && tr == trustSideloaded {
+			findings = append(findings, module.Finding{Key: "source", Value: "loaded from " + path, Flag: module.FlagInfo})
+		}
 		locLabel, _ := chromeLocation(loc)
-		title := "browser extension: " + x.name + " (" + p.browser + "/" + p.name + " · " + id[:min(8, len(id))] + " · " + locLabel + ")"
+		title := "browser extension: " + name + " (" + p.browser + "/" + p.name + " · " + id[:min(8, len(id))] + " · " + locLabel + ")"
 		notes = append(notes, module.Note{Title: title, Findings: findings, Summary: summary})
 	}
 	// A one-line context note so the operator knows the rest were checked.
@@ -109,6 +134,28 @@ func hasVerifiedContents(profileDir, id string) bool {
 		}
 	}
 	return false
+}
+
+// readManifestFile reads an unpacked extension's manifest.json from its on-disk
+// directory (unpacked extensions are referenced in place, not copied into
+// Preferences).
+func readManifestFile(dir string) map[string]any {
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal(data, &m) != nil {
+		return nil
+	}
+	return m
+}
+
+func baseName(path, id string) string {
+	if path != "" {
+		return filepath.Base(path)
+	}
+	return id[:min(16, len(id))]
 }
 
 // manifestFacts is the subset of a manifest we score.
@@ -257,7 +304,9 @@ func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []mod
 		findings = append(findings, module.Finding{Key: "provenance", Value: "Chrome Web Store, content-verified (Google-signed, tamper-detected)", Flag: module.FlagInfo})
 	}
 
-	risky = broad || cookies || intercept || proxy || native
+	// A sideloaded (unpacked) extension is always worth reporting — the provenance
+	// itself is the signal — even if its declared permissions are narrow.
+	risky = broad || cookies || intercept || proxy || native || tr == trustSideloaded
 	switch {
 	case cursed && tr == trustSideloaded:
 		summary = "SIDELOADED extension with total-browser reach — prime CursedChrome vector"
