@@ -56,33 +56,43 @@ func Scan(o Options) []module.Note {
 
 type profile struct{ browser, name, dir string }
 
+// browserRoots is every Chromium-family user-data root for the platform. They
+// all share the same Default/Profile-N layout with Preferences / Extensions /
+// Cookies, so one code path covers Chrome, Edge, Brave, Chromium, and Vivaldi.
+func browserRoots(o Options) []struct{ browser, dir string } {
+	type spec struct{ browser, mac, linux, win string }
+	specs := []spec{
+		{"Chrome", "Google/Chrome", "google-chrome", "Google/Chrome/User Data"},
+		{"Edge", "Microsoft Edge", "microsoft-edge", "Microsoft Edge/User Data"},
+		{"Brave", "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser/User Data"},
+		{"Chromium", "Chromium", "chromium", "Chromium/User Data"},
+		{"Vivaldi", "Vivaldi", "vivaldi", "Vivaldi/User Data"},
+	}
+	out := make([]struct{ browser, dir string }, 0, len(specs))
+	for _, s := range specs {
+		var dir string
+		switch o.GOOS {
+		case "darwin":
+			dir = filepath.Join(o.Home, "Library", "Application Support", filepath.FromSlash(s.mac))
+		case "windows":
+			local := os.Getenv("LOCALAPPDATA")
+			if local == "" {
+				local = filepath.Join(o.Home, "AppData", "Local")
+			}
+			dir = filepath.Join(local, filepath.FromSlash(s.win))
+		default: // linux and others
+			dir = filepath.Join(o.Home, ".config", filepath.FromSlash(s.linux))
+		}
+		out = append(out, struct{ browser, dir string }{s.browser, dir})
+	}
+	return out
+}
+
 // discoverProfiles finds every Chrome/Edge profile (a dir holding a Preferences
 // file) under the platform's user-data roots.
 func discoverProfiles(o Options) []profile {
-	var roots []struct{ browser, dir string }
-	switch o.GOOS {
-	case "darwin":
-		roots = []struct{ browser, dir string }{
-			{"Chrome", filepath.Join(o.Home, "Library", "Application Support", "Google", "Chrome")},
-			{"Edge", filepath.Join(o.Home, "Library", "Application Support", "Microsoft Edge")},
-		}
-	case "windows":
-		local := os.Getenv("LOCALAPPDATA")
-		if local == "" {
-			local = filepath.Join(o.Home, "AppData", "Local")
-		}
-		roots = []struct{ browser, dir string }{
-			{"Chrome", filepath.Join(local, "Google", "Chrome", "User Data")},
-			{"Edge", filepath.Join(local, "Microsoft Edge", "User Data")},
-		}
-	default: // linux and others
-		roots = []struct{ browser, dir string }{
-			{"Chrome", filepath.Join(o.Home, ".config", "google-chrome")},
-			{"Edge", filepath.Join(o.Home, ".config", "microsoft-edge")},
-		}
-	}
 	var out []profile
-	for _, r := range roots {
+	for _, r := range browserRoots(o) {
 		entries, err := os.ReadDir(r.dir)
 		if err != nil {
 			continue

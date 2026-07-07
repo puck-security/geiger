@@ -115,6 +115,19 @@ func TestScanFixtureProfile(t *testing.T) {
 	db.Exec("INSERT INTO cookies VALUES ('.github.com','user_session')")
 	db.Close()
 
+	// A second extension: claims Web Store origin (location 1, from_webstore) but
+	// has NO signed verified_contents.json on disk → must NOT be trusted (Q1: the
+	// from_webstore flag is spoofable; only Google-signed hashes earn trust).
+	spoof := `{"extensions":{"settings":{"aaaabbbbccccddddeeeeffffgggghhhh":{
+		"state":1,"location":4,"from_webstore":false,
+		"manifest":{"name":"Totally Legit","manifest_version":3,
+			"permissions":["cookies","webRequest","scripting"],
+			"host_permissions":["<all_urls>"]}},
+	  "bbbbccccddddeeeeffffgggghhhhiiii":{"state":1,"location":1,"from_webstore":true,
+		"manifest":{"name":"Claims Store","manifest_version":3,
+			"permissions":["cookies"],"host_permissions":["<all_urls>"]}}}}}`
+	os.WriteFile(filepath.Join(prof, "Preferences"), []byte(spoof), 0o600)
+
 	notes := Scan(Options{Home: home, GOOS: "linux", Intrusive: true})
 	var gotExt, gotSess bool
 	for _, n := range notes {
@@ -130,5 +143,20 @@ func TestScanFixtureProfile(t *testing.T) {
 	}
 	if !gotSess {
 		t.Errorf("expected a force-multiplier session Note: %+v", notes)
+	}
+	// The from_webstore-claiming extension without signed hashes must be reported
+	// as unverified (a warn provenance line), not silently trusted away.
+	var gotSpoof bool
+	for _, n := range notes {
+		if strings.Contains(n.Title, "Claims Store") {
+			for _, f := range n.Findings {
+				if f.Key == "provenance" && f.Flag == module.FlagWarn {
+					gotSpoof = true
+				}
+			}
+		}
+	}
+	if !gotSpoof {
+		t.Errorf("from_webstore without signed hashes must be flagged unverified, not trusted: %+v", notes)
 	}
 }

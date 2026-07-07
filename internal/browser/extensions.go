@@ -41,7 +41,14 @@ func scanExtensions(p profile, live bool) []module.Note {
 			continue
 		}
 		loc, _ := e["location"].(float64)
-		verified := hasVerifiedContents(p.dir, id) || e["from_webstore"] == true
+		if int(loc) == 5 {
+			continue // component extension — the browser's own built-in code, not a threat vector
+		}
+		// Trust the Google-SIGNED verified_contents.json ONLY — not the
+		// from_webstore boolean (spoofable by anyone who can forge the Preferences
+		// MAC) and not the manifest's own update_url (attacker-controlled). Signed
+		// content verification is the one anchor an attacker can't forge.
+		verified := hasVerifiedContents(p.dir, id)
 		x := extractManifest(mani, id)
 		findings, risky, tr, summary := scoreExtension(x, loc, verified)
 		if !risky {
@@ -153,12 +160,14 @@ func trustLevel(loc float64, verified bool) trust {
 		return trustSideloaded
 	case 5, 7, 9, 10: // component / enterprise policy — admin-managed
 		return trustPolicy
-	case 1, 2, 3, 6: // Web Store + external mechanisms (which now require a Web Store
-		// update_url, so they are content-verified like a normal store install)
+	case 1, 2, 3, 6: // Web Store + external registry/pref mechanisms
+		// Only the presence of Google-signed content hashes earns full trust. A
+		// store-claimed extension with no signed hashes on disk is NOT trusted
+		// (the --live check then confirms whether it's still actually listed).
 		if verified {
 			return trustWebstore
 		}
-		return trustUnknown // store-claimed but no signed hashes on disk → suspicious
+		return trustUnknown
 	default:
 		return trustUnknown
 	}

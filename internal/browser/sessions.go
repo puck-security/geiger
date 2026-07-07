@@ -2,6 +2,7 @@ package browser
 
 import (
 	"database/sql"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,8 +51,22 @@ func cookiesDBPath(profileDir string) string {
 }
 
 // readCookieHosts returns the (host_key, name) pairs. immutable=1 opens the DB
-// read-only even while Chrome holds a lock, and never writes.
+// read-only, lock-free, and never writes. If that fails (e.g. Windows share-mode
+// locking while the browser is running), it retries against a temp copy.
 func readCookieHosts(path string) ([]cookie, error) {
+	out, err := queryCookieHosts(path)
+	if err == nil {
+		return out, nil
+	}
+	tmp, cerr := copyToTemp(path)
+	if cerr != nil {
+		return nil, err // report the original read error
+	}
+	defer os.Remove(tmp)
+	return queryCookieHosts(tmp)
+}
+
+func queryCookieHosts(path string) ([]cookie, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1")
 	if err != nil {
 		return nil, err
@@ -70,6 +85,32 @@ func readCookieHosts(path string) ([]cookie, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+// copyToTemp copies a file to a temp path. Succeeds when the browser holds the
+// original with FILE_SHARE_READ (the common case) even if a direct DB open was
+// refused; fails if it's exclusively locked, in which case the caller surfaces
+// the original error.
+func copyToTemp(path string) (string, error) {
+	src, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	dst, err := os.CreateTemp("", "geiger-cookies-*.db")
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		os.Remove(dst.Name())
+		return "", err
+	}
+	if err := dst.Close(); err != nil {
+		os.Remove(dst.Name())
+		return "", err
+	}
+	return dst.Name(), nil
 }
 
 type cookie struct{ host, name string }
