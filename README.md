@@ -140,8 +140,8 @@ geiger --live ~/.ssh            # fingerprint + test GitHub/GitLab/Bitbucket acc
 geiger --ssh-correlate ~/.ssh   # + guess other target hosts from local hints
 ```
 
-**Browser extensions** — `--browser` models the impact of a malicious Chrome/Edge
-extension (CursedChrome-style proxy, infostealer, sideloaded MV3). It scores each
+**Browser extensions** — `--browser` models the impact of a malicious Chromium-family
+(Chrome, Edge, Brave, Chromium, Vivaldi) extension (CursedChrome-style proxy, infostealer, sideloaded MV3). It scores each
 installed extension's permission union — `cookies` + broad host access + request
 interception / script injection / proxy = read every site's session cookies and
 pivot through the browser — and flags sideloaded/unpacked ones (unsigned, not
@@ -207,6 +207,8 @@ answers the question they leave open: *now that you found it, how bad is it?*
 | `--min-footprint` | identity call only; skip inventory fan-out |
 | `--env` | read current environment variables |
 | `--metadata` | harvest this instance's metadata credential (AWS/GCP/Azure/k8s/Alibaba/DigitalOcean/OCI) and triage it; requires `--live` (it's a network read) |
+| `--browser` | model malicious-browser-extension impact: score installed Chromium-family extensions; with `--live --intrusive`, inventory the live sessions they'd reach |
+| `--all` | with `--browser`, list every extension (not just the risky ones) |
 | `--endpoint URL` | host/instance for self-hosted & set-shaped creds |
 | `--proxy URL` | route HTTP recon via http/https/socks5 proxy |
 | `--timeout DUR` | per-credential recon timeout (default `15s`) |
@@ -247,6 +249,9 @@ geiger triages a credential **you were handed**, or one **sitting on disk**.
   by DPAPI / macOS Keychain / Secret Service), raw DPAPI blobs, the macOS
   Keychain, LSASS. Reading those means decrypting against a live OS session —
   credential *extraction from a host*, not triage of one. Not always a black and white line.
+  (`--browser` models the extension-capability and session-*metadata* angle — which
+  domains have a live session, which extension could reach them — without decrypting
+  the cookie values; see **Browser extensions** above.)
 
 ### Coverage
 
