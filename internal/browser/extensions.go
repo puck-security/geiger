@@ -17,7 +17,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // authoritative registry — it also lists unpacked, external, and policy
 // extensions the Extensions/ folder alone would miss) and returns a Note per
 // extension whose permission union is risky.
-func scanExtensions(p profile, live bool) []module.Note {
+func scanExtensions(p profile, live, intrusive bool) []module.Note {
 	settings := map[string]map[string]any{}
 	for _, f := range []string{"Preferences", "Secure Preferences"} {
 		mergeExtSettings(filepath.Join(p.dir, f), settings)
@@ -88,6 +88,18 @@ func scanExtensions(p profile, live bool) []module.Note {
 		// The on-disk source of a sideloaded extension is a key IOC.
 		if path != "" && tr == trustSideloaded {
 			findings = append(findings, module.Finding{Key: "source", Value: "loaded from " + path, Flag: module.FlagInfo})
+		}
+		// Responder triage bundle for the ambiguous cases (sideloaded / unknown
+		// origin) — provenance context + a low-FP grep for hardcoded remote hosts.
+		if tr == trustSideloaded || tr == trustUnknown {
+			srcDir, external := path, true
+			if srcDir == "" {
+				srcDir, external = extensionCodeDir(p.dir, id), false
+			}
+			findings = append(findings, triageFindings(triageInput{
+				profileDir: p.dir, id: id, srcDir: srcDir, external: external,
+				manifest: mani, intrusive: intrusive,
+			})...)
 		}
 		locLabel, _ := chromeLocation(loc)
 		title := "browser extension: " + name + " (" + p.browser + "/" + p.name + " · " + id[:min(8, len(id))] + " · " + locLabel + ")"

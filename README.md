@@ -149,9 +149,18 @@ content-verified). With `--live --intrusive` it also inventories the live sessio
 such an extension would reach from the Cookies store *metadata* (domains only — the
 values are keychain-encrypted), ranked by blast radius (IdP/SSO sessions first).
 
+Because an unsigned all-sites extension is capability-identical to a real
+CursedChrome, geiger doesn't guess intent — for each flagged sideloaded extension
+it builds a **responder triage bundle**: install age, UI surface, dev-project
+markers, the extension id, and a low-false-positive grep of its on-disk code (and,
+under `--intrusive`, its LevelDB storage) for hardcoded remote hosts (websocket /
+public-IP endpoints) to **verify against egress/DNS logs**. Everything is emitted
+as clean IOCs in `--json` (`detail` arrays) for a SIEM.
+
 ```sh
-geiger --browser                    # score installed extensions' reach
-geiger --browser --live --intrusive # + inventory the live sessions they'd hijack
+geiger --browser                    # score extensions + triage bundle
+geiger --browser --live --intrusive # + session inventory + storage IOC grep
+geiger --browser --json             # IOCs (extension id, hosts) for a SIEM
 ```
 
 ---

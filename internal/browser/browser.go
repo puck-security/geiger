@@ -46,7 +46,7 @@ func Scan(o Options) []module.Note {
 	}
 	var notes []module.Note
 	for _, p := range discoverProfiles(o) {
-		notes = append(notes, scanExtensions(p, o.Live)...)
+		notes = append(notes, scanExtensions(p, o.Live, o.Intrusive)...)
 		if o.Intrusive {
 			notes = append(notes, scanSessions(p)...)
 		}
