@@ -1,0 +1,291 @@
+package browser
+
+import (
+	"database/sql"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/puck-security/geiger/internal/module"
+)
+
+func hasFlag(fs []module.Finding, want module.FlagLevel) bool {
+	for _, f := range fs {
+		if f.Flag == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestScoreExtension(t *testing.T) {
+	broadCaps := manifestFacts{mv: 3,
+		permissions: []string{"cookies", "webRequest", "scripting", "tabs"},
+		hostPerms:   []string{"<all_urls>"}}
+
+	// UNSIGNED code + all-sites access = the CursedChrome profile → force multiplier.
+	broadCaps.name = "CursedChrome"
+	fs, risky, tr, _ := scoreExtension(broadCaps, 4 /*unpacked*/, false)
+	if !risky || tr != trustSideloaded {
+		t.Fatalf("unpacked broad extension should be risky+sideloaded, got risky=%v tr=%v", risky, tr)
+	}
+	if !hasFlag(fs, module.FlagForceMultiplier) {
+		t.Errorf("sideloaded + all-sites access must be a force multiplier: %+v", fs)
+	}
+
+	// SAME reach on content-verified Web Store code → info only (normal, like uBlock).
+	broadCaps.name = "uBlock"
+	fs, _, tr, _ = scoreExtension(broadCaps, 1 /*webstore*/, true)
+	if tr != trustWebstore {
+		t.Fatalf("expected trustWebstore, got %v", tr)
+	}
+	if hasFlag(fs, module.FlagForceMultiplier) || hasFlag(fs, module.FlagWarn) {
+		t.Errorf("content-verified Web Store extension should be info-only: %+v", fs)
+	}
+
+	// UNSIGNED but NARROW (a benign dev extension) → warn, NOT a force multiplier.
+	narrow := manifestFacts{name: "DevTool", mv: 3, permissions: []string{"storage", "tabs"},
+		hostPerms: []string{"http://localhost/*"}}
+	fs, risky, _, _ = scoreExtension(narrow, 4 /*unpacked*/, false)
+	if !risky {
+		t.Fatal("a sideloaded extension should be reported even when narrow")
+	}
+	if hasFlag(fs, module.FlagForceMultiplier) {
+		t.Errorf("narrow sideloaded extension must NOT be a force multiplier: %+v", fs)
+	}
+	if !hasFlag(fs, module.FlagWarn) {
+		t.Errorf("narrow sideloaded extension should be a warn: %+v", fs)
+	}
+
+	// Narrow, silent-permission, Web Store → not reportable.
+	benign := manifestFacts{name: "Nice", mv: 3, permissions: []string{"storage", "alarms"},
+		hostPerms: []string{"https://example.com/*"}}
+	if _, risky, _, _ := scoreExtension(benign, 1, true); risky {
+		t.Errorf("narrow web store extension should not be risky")
+	}
+}
+
+func TestScanUnpackedFromDisk(t *testing.T) {
+	home := t.TempDir()
+	prof := filepath.Join(home, ".config", "google-chrome", "Default")
+	if err := os.MkdirAll(prof, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The unpacked extension's real folder + manifest.json — Chrome references it
+	// in place and does NOT copy the manifest into Preferences.
+	extDir := filepath.Join(home, "evil-ext")
+	os.MkdirAll(extDir, 0o755)
+	os.WriteFile(filepath.Join(extDir, "manifest.json"),
+		[]byte(`{"name":"Disk Unpacked","manifest_version":3,"permissions":["cookies"],"host_permissions":["<all_urls>"]}`), 0o600)
+	// Two unpacked entries with NO embedded manifest: one whose folder exists, one
+	// whose folder is gone. Both must still surface.
+	prefs := `{"extensions":{"settings":{
+		"aaaabbbbccccddddeeeeffffgggghhhh":{"location":4,"path":"` + extDir + `"},
+		"bbbbccccddddeeeeffffgggghhhhiiii":{"location":4,"path":"` + filepath.Join(home, "gone") + `"}}}}`
+	if err := os.WriteFile(filepath.Join(prof, "Preferences"), []byte(prefs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notes := Scan(Options{Home: home, GOOS: "linux"})
+	var fromDisk, unreadable bool
+	for _, n := range notes {
+		// unpacked + <all_urls> → force multiplier (CursedChrome profile)
+		if strings.Contains(n.Title, "Disk Unpacked") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+			fromDisk = true
+		}
+		// missing-folder unpacked (reach unknown) → warn IOC
+		if strings.Contains(n.Title, "gone") && hasFlag(n.Findings, module.FlagWarn) {
+			unreadable = true
+		}
+	}
+	if !fromDisk {
+		t.Errorf("unpacked extension with an on-disk manifest should be read + flagged: %+v", notes)
+	}
+	if !unreadable {
+		t.Errorf("unpacked extension with a missing folder should still be flagged (IOC): %+v", notes)
+	}
+}
+
+func containsTitle(notes []module.Note, sub string) bool {
+	for _, n := range notes {
+		if strings.Contains(n.Title, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAllListsBenignAndCollapseIsWeightless(t *testing.T) {
+	home := t.TempDir()
+	prof := filepath.Join(home, ".config", "google-chrome", "Default")
+	if err := os.MkdirAll(prof, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prefs := `{"extensions":{"settings":{
+		"aaaabbbbccccddddeeeeffffgggghhhh":{"state":1,"location":4,"manifest":{"name":"Risky","manifest_version":3,"host_permissions":["<all_urls>"]}},
+		"bbbbccccddddeeeeffffgggghhhhiiii":{"state":1,"location":1,"manifest":{"name":"Benign One","manifest_version":3,"permissions":["storage"]}},
+		"ccccddddeeeeffffgggghhhhiiiijjjj":{"state":1,"location":1,"manifest":{"name":"Benign Two","manifest_version":3,"permissions":["alarms"]}}}}}`
+	if err := os.WriteFile(filepath.Join(prof, "Preferences"), []byte(prefs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: benign extensions are collapsed, not listed, and the "also installed"
+	// context line must be weightless (FlagNone) so it never bumps a note's tier.
+	def := Scan(Options{Home: home, GOOS: "linux"})
+	if containsTitle(def, "Benign One") {
+		t.Errorf("benign extension should be collapsed by default: %+v", def)
+	}
+	for _, n := range def {
+		for _, f := range n.Findings {
+			if f.Key == "also installed" && f.Flag != module.FlagNone {
+				t.Errorf("'also installed' must be FlagNone (never inflates the tier), got %v", f.Flag)
+			}
+		}
+	}
+	// --all: every extension is listed.
+	all := Scan(Options{Home: home, GOOS: "linux", All: true})
+	if !containsTitle(all, "Benign One") || !containsTitle(all, "Benign Two") {
+		t.Errorf("--all should list benign extensions: %+v", all)
+	}
+}
+
+func TestGrantedNarrowsReach(t *testing.T) {
+	home := t.TempDir()
+	prof := filepath.Join(home, ".config", "google-chrome", "Default")
+	if err := os.MkdirAll(prof, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Unpacked extension REQUESTS <all_urls> but the user granted only one site
+	// (Chrome's per-site access control). We score the granted reach, so it must
+	// NOT be treated as all-sites / CursedChrome-grade.
+	prefs := `{"extensions":{"settings":{"aaaabbbbccccddddeeeeffffgggghhhh":{
+		"state":1,"location":4,"from_webstore":false,
+		"granted_permissions":{"api":["cookies"],"explicit_host":["https://example.com/*"]},
+		"manifest":{"name":"Pinned","manifest_version":3,"permissions":["cookies"],"host_permissions":["<all_urls>"]}}}}}`
+	if err := os.WriteFile(filepath.Join(prof, "Preferences"), []byte(prefs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notes := Scan(Options{Home: home, GOOS: "linux"})
+	for _, n := range notes {
+		if strings.Contains(n.Title, "Pinned") {
+			if hasFlag(n.Findings, module.FlagForceMultiplier) {
+				t.Errorf("granted scope is one site, not all — must NOT be a force multiplier: %+v", n.Findings)
+			}
+			return
+		}
+	}
+	t.Fatalf("Pinned extension not found: %+v", notes)
+}
+
+func TestWebStoreStatusSkipsNonStoreID(t *testing.T) {
+	// A path-derived / non-store id must not trigger a network call and must not
+	// be penalized (returns listed=true).
+	if listed, _ := webStoreStatus("not-a-32char-a-p-id", nil); !listed {
+		t.Error("non-store id should be treated as listed (no network, no penalty)")
+	}
+}
+
+func TestClassifySessions(t *testing.T) {
+	cs := []cookie{
+		{"accounts.google.com", "SID"},    // IdP — presence counts
+		{".github.com", "user_session"},   // VCS — auth cookie
+		{"example.com", "_ga"},            // analytics — ignored
+		{"login.okta.com", "sid"},         // IdP
+		{"slack.com", "d"},                // collab but not auth-named → ignored
+		{"gitlab.com", "_gitlab_session"}, // VCS — auth cookie
+	}
+	tiers := classifySessions(cs)
+	if !tiers.idp["accounts.google.com"] || !tiers.idp["okta.com"] {
+		t.Errorf("idp tier wrong: %+v", tiers.idp)
+	}
+	if !tiers.vcs["github.com"] || !tiers.vcs["gitlab.com"] {
+		t.Errorf("vcs tier wrong: %+v", tiers.vcs)
+	}
+	if len(tiers.cloud) != 0 {
+		t.Errorf("no cloud sessions expected: %+v", tiers.cloud)
+	}
+	// Sessions are informational — being logged in is normal, not a finding.
+	fs := tiers.findings()
+	if len(fs) == 0 {
+		t.Fatal("expected session findings")
+	}
+	if hasFlag(fs, module.FlagForceMultiplier) || hasFlag(fs, module.FlagWarn) {
+		t.Errorf("browser sessions must be informational, not warn/fm: %+v", fs)
+	}
+}
+
+func TestScanFixtureProfile(t *testing.T) {
+	home := t.TempDir()
+	prof := filepath.Join(home, ".config", "google-chrome", "Default")
+	if err := os.MkdirAll(prof, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Preferences with one unpacked (location 4) CursedChrome-grade extension.
+	prefs := `{"extensions":{"settings":{"aaaabbbbccccddddeeeeffffgggghhhh":{
+		"state":1,"location":4,"from_webstore":false,
+		"manifest":{"name":"Totally Legit","manifest_version":3,
+			"permissions":["cookies","webRequest","scripting"],
+			"host_permissions":["<all_urls>"]}}}}}`
+	if err := os.WriteFile(filepath.Join(prof, "Preferences"), []byte(prefs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A synthetic Cookies DB (metadata only).
+	cookiesPath := filepath.Join(prof, "Cookies")
+	db, err := sql.Open("sqlite", "file:"+cookiesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE cookies (host_key TEXT, name TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	db.Exec("INSERT INTO cookies VALUES ('accounts.google.com','SID')")
+	db.Exec("INSERT INTO cookies VALUES ('.github.com','user_session')")
+	db.Close()
+
+	// A second extension: claims Web Store origin (location 1, from_webstore) but
+	// has NO signed verified_contents.json on disk → must NOT be trusted (Q1: the
+	// from_webstore flag is spoofable; only Google-signed hashes earn trust).
+	spoof := `{"extensions":{"settings":{"aaaabbbbccccddddeeeeffffgggghhhh":{
+		"state":1,"location":4,"from_webstore":false,
+		"manifest":{"name":"Totally Legit","manifest_version":3,
+			"permissions":["cookies","webRequest","scripting"],
+			"host_permissions":["<all_urls>"]}},
+	  "bbbbccccddddeeeeffffgggghhhhiiii":{"state":1,"location":1,"from_webstore":true,
+		"manifest":{"name":"Claims Store","manifest_version":3,
+			"permissions":["cookies"],"host_permissions":["<all_urls>"]}}}}}`
+	os.WriteFile(filepath.Join(prof, "Preferences"), []byte(spoof), 0o600)
+
+	notes := Scan(Options{Home: home, GOOS: "linux", Intrusive: true})
+	var gotExt, gotSess bool
+	for _, n := range notes {
+		// Unpacked + <all_urls> = CursedChrome profile → force multiplier.
+		if strings.Contains(n.Title, "Totally Legit") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+			gotExt = true
+		}
+		// Session inventory present and informational (not warn/fm).
+		if strings.Contains(n.Title, "browser sessions") && !hasFlag(n.Findings, module.FlagWarn) && !hasFlag(n.Findings, module.FlagForceMultiplier) {
+			gotSess = true
+		}
+	}
+	if !gotExt {
+		t.Errorf("expected the unpacked extension flagged warn: %+v", notes)
+	}
+	if !gotSess {
+		t.Errorf("expected an informational session Note: %+v", notes)
+	}
+	// The from_webstore-claiming extension without signed hashes must be reported
+	// as unverified (a warn provenance line), not silently trusted away.
+	var gotSpoof bool
+	for _, n := range notes {
+		if strings.Contains(n.Title, "Claims Store") {
+			for _, f := range n.Findings {
+				if f.Key == "provenance" && f.Flag == module.FlagWarn {
+					gotSpoof = true
+				}
+			}
+		}
+	}
+	if !gotSpoof {
+		t.Errorf("from_webstore without signed hashes must be flagged unverified, not trusted: %+v", notes)
+	}
+}
