@@ -29,6 +29,7 @@ import (
 type Options struct {
 	Live      bool   // permit the network Web Store liveness check on store extensions
 	Intrusive bool   // read the Cookies DB metadata (the sensitive session inventory)
+	Proxy     string // route the --live Web Store check through this proxy (http/https/socks5)
 	Home      string // override home dir (tests); defaults to os.UserHomeDir
 	GOOS      string // override runtime.GOOS (tests)
 }
@@ -44,9 +45,10 @@ func Scan(o Options) []module.Note {
 	if o.GOOS == "" {
 		o.GOOS = runtime.GOOS
 	}
+	cws := webStoreClient(o.Proxy)
 	var notes []module.Note
 	for _, p := range discoverProfiles(o) {
-		notes = append(notes, scanExtensions(p, o.Live, o.Intrusive)...)
+		notes = append(notes, scanExtensions(p, o.Live, o.Intrusive, cws)...)
 		if o.Intrusive {
 			notes = append(notes, scanSessions(p)...)
 		}

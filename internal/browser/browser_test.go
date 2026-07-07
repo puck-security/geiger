@@ -106,10 +106,38 @@ func TestScanUnpackedFromDisk(t *testing.T) {
 	}
 }
 
+func TestGrantedNarrowsReach(t *testing.T) {
+	home := t.TempDir()
+	prof := filepath.Join(home, ".config", "google-chrome", "Default")
+	if err := os.MkdirAll(prof, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Unpacked extension REQUESTS <all_urls> but the user granted only one site
+	// (Chrome's per-site access control). We score the granted reach, so it must
+	// NOT be treated as all-sites / CursedChrome-grade.
+	prefs := `{"extensions":{"settings":{"aaaabbbbccccddddeeeeffffgggghhhh":{
+		"state":1,"location":4,"from_webstore":false,
+		"granted_permissions":{"api":["cookies"],"explicit_host":["https://example.com/*"]},
+		"manifest":{"name":"Pinned","manifest_version":3,"permissions":["cookies"],"host_permissions":["<all_urls>"]}}}}}`
+	if err := os.WriteFile(filepath.Join(prof, "Preferences"), []byte(prefs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notes := Scan(Options{Home: home, GOOS: "linux"})
+	for _, n := range notes {
+		if strings.Contains(n.Title, "Pinned") {
+			if hasFlag(n.Findings, module.FlagForceMultiplier) {
+				t.Errorf("granted scope is one site, not all — must NOT be a force multiplier: %+v", n.Findings)
+			}
+			return
+		}
+	}
+	t.Fatalf("Pinned extension not found: %+v", notes)
+}
+
 func TestWebStoreStatusSkipsNonStoreID(t *testing.T) {
 	// A path-derived / non-store id must not trigger a network call and must not
 	// be penalized (returns listed=true).
-	if listed, _ := webStoreStatus("not-a-32char-a-p-id"); !listed {
+	if listed, _ := webStoreStatus("not-a-32char-a-p-id", nil); !listed {
 		t.Error("non-store id should be treated as listed (no network, no penalty)")
 	}
 }

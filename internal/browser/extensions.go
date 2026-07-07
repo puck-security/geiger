@@ -2,6 +2,7 @@ package browser
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,7 +18,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // authoritative registry — it also lists unpacked, external, and policy
 // extensions the Extensions/ folder alone would miss) and returns a Note per
 // extension whose permission union is risky.
-func scanExtensions(p profile, live, intrusive bool) []module.Note {
+func scanExtensions(p profile, live, intrusive bool, cws *http.Client) []module.Note {
 	settings := map[string]map[string]any{}
 	for _, f := range []string{"Preferences", "Secure Preferences"} {
 		mergeExtSettings(filepath.Join(p.dir, f), settings)
@@ -59,6 +60,12 @@ func scanExtensions(p profile, live, intrusive bool) []module.Note {
 		switch {
 		case mani != nil:
 			x := extractManifest(mani, id)
+			if gh, ok := grantedHosts(e); ok {
+				// Score the ACTUAL granted reach, not the manifest request: Chrome's
+				// per-site "on click / specific sites" control can narrow a
+				// <all_urls>-requesting extension to far less at runtime.
+				x.hostPerms, x.contentMatch, x.granted = gh, nil, true
+			}
 			name = x.name
 			findings, risky, tr, summary = scoreExtension(x, loc, verified)
 		case tr == trustSideloaded:
@@ -80,7 +87,7 @@ func scanExtensions(p profile, live, intrusive bool) []module.Note {
 		// (removed/delisted) is a strong IOC. Only under --live (a network call),
 		// and only for store-claimed extensions (sideloaded ones have no listing).
 		if live && (tr == trustWebstore || tr == trustUnknown) {
-			if listed, note := webStoreStatus(id); !listed {
+			if listed, note := webStoreStatus(id, cws); !listed {
 				findings = append(findings, module.Finding{Key: "web store", Value: note + " — but still installed here", Flag: module.FlagWarn})
 				summary = "installed extension NOT in the public Web Store — verify"
 			}
@@ -175,8 +182,22 @@ type manifestFacts struct {
 	name         string
 	mv           int
 	permissions  []string // API permissions (MV2 also holds host patterns here)
-	hostPerms    []string // host_permissions (MV3)
+	hostPerms    []string // host_permissions (MV3), or the user-granted host set
 	contentMatch []string // content_scripts[].matches
+	granted      bool     // hostPerms reflect the runtime-granted set, not the request
+}
+
+// grantedHosts returns the user-granted host set (explicit + scriptable) from a
+// Preferences entry — the actual runtime reach, which Chrome's per-site access
+// control can narrow below the manifest request. ok is true when the entry
+// carries a granted_permissions block at all (so an empty result means "granted
+// no hosts" — e.g. pinned to on-click — not "unknown").
+func grantedHosts(e map[string]any) (hosts []string, ok bool) {
+	gp, ok := e["granted_permissions"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return append(strSlice(gp["explicit_host"]), strSlice(gp["scriptable_host"])...), true
 }
 
 func extractManifest(m map[string]any, id string) manifestFacts {
@@ -244,7 +265,9 @@ func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []mod
 	// MV2 folds host patterns into permissions; MV3 uses host_permissions. Also
 	// content-script matches count as host reach.
 	hosts := append(append([]string{}, x.hostPerms...), x.contentMatch...)
-	if x.mv < 3 {
+	if x.mv < 3 && !x.granted {
+		// MV2 folds host patterns into permissions — but the granted set already
+		// separates hosts from API perms, so don't re-add them there.
 		hosts = append(hosts, x.permissions...)
 	}
 	broad := broadHost(hosts)
@@ -258,7 +281,7 @@ func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []mod
 
 	tr = trustLevel(loc, verified)
 
-	findings = append(findings, module.Finding{Key: "manifest", Value: "MV" + itoa(x.mv) + hostSummary(hosts), Flag: module.FlagInfo})
+	findings = append(findings, module.Finding{Key: "manifest", Value: "MV" + itoa(x.mv) + hostSummary(hosts, x.granted), Flag: module.FlagInfo})
 
 	// Capabilities — descriptive context (info). They say what an extension COULD
 	// do; on trusted code that's normal, so they never set severity themselves.
@@ -348,9 +371,13 @@ func broadHost(patterns []string) bool {
 	return false
 }
 
-func hostSummary(hosts []string) string {
+func hostSummary(hosts []string, granted bool) string {
+	label := "host access"
+	if granted {
+		label = "host access (user-granted)"
+	}
 	if broadHost(hosts) {
-		return " · host access: ALL sites (<all_urls>)"
+		return " · " + label + ": ALL sites (<all_urls>)"
 	}
 	n := 0
 	for _, h := range hosts {
@@ -359,9 +386,12 @@ func hostSummary(hosts []string) string {
 		}
 	}
 	if n == 0 {
+		if granted {
+			return " · " + label + ": none (on-click / no sites granted)"
+		}
 		return " · host access: none declared"
 	}
-	return " · host access: " + itoa(n) + " site pattern(s)"
+	return " · " + label + ": " + itoa(n) + " site pattern(s)"
 }
 
 // --- small helpers ---
