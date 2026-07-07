@@ -173,7 +173,7 @@ func grepHosts(dirs []string) []string {
 		if root == "" {
 			continue
 		}
-		filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
