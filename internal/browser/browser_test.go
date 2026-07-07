@@ -24,27 +24,35 @@ func TestScoreExtension(t *testing.T) {
 		permissions: []string{"cookies", "webRequest", "scripting", "tabs"},
 		hostPerms:   []string{"<all_urls>"}}
 
-	// Same reach, UNPACKED (sideloaded) → force multiplier (the CursedChrome vector).
+	// Broad reach, UNPACKED (sideloaded) → notable (warn provenance), but NOT a
+	// force multiplier: capability isn't malice. Capabilities are info.
 	broadCaps.name = "Evil"
-	fs, risky, tr, summary := scoreExtension(broadCaps, 4 /*unpacked*/, false)
+	fs, risky, tr, _ := scoreExtension(broadCaps, 4 /*unpacked*/, false)
 	if !risky || tr != trustSideloaded {
 		t.Fatalf("unpacked broad extension should be risky+sideloaded, got risky=%v tr=%v", risky, tr)
 	}
-	if !hasFlag(fs, module.FlagForceMultiplier) {
-		t.Errorf("sideloaded broad extension must be a force multiplier: %+v", fs)
+	if hasFlag(fs, module.FlagForceMultiplier) {
+		t.Errorf("a sideloaded extension WITHOUT proxy must not be a force multiplier: %+v", fs)
 	}
-	if !strings.HasPrefix(summary, "SIDELOADED") {
-		t.Errorf("sideloaded summary expected, got %q", summary)
+	if !hasFlag(fs, module.FlagWarn) {
+		t.Errorf("sideloaded provenance should be a warn: %+v", fs)
 	}
 
-	// Same reach, Web Store + content-verified → near-info (no force multiplier).
+	// The one alarm: proxy permission on unsigned code → force multiplier.
+	withProxy := broadCaps
+	withProxy.permissions = append([]string{"proxy"}, broadCaps.permissions...)
+	if fs, _, _, _ := scoreExtension(withProxy, 4, false); !hasFlag(fs, module.FlagForceMultiplier) {
+		t.Errorf("sideloaded + proxy should be a force multiplier: %+v", fs)
+	}
+
+	// Same broad reach, Web Store + content-verified → info only (no warn/fm).
 	broadCaps.name = "uBlock"
 	fs, risky, tr, _ = scoreExtension(broadCaps, 1 /*webstore*/, true)
 	if !risky || tr != trustWebstore {
 		t.Fatalf("webstore broad extension should be risky+webstore, got risky=%v tr=%v", risky, tr)
 	}
-	if hasFlag(fs, module.FlagForceMultiplier) {
-		t.Errorf("content-verified Web Store extension must NOT be a force multiplier: %+v", fs)
+	if hasFlag(fs, module.FlagForceMultiplier) || hasFlag(fs, module.FlagWarn) {
+		t.Errorf("content-verified Web Store extension should be info-only: %+v", fs)
 	}
 
 	// Narrow, silent-permission extension → not reportable.
@@ -78,10 +86,10 @@ func TestScanUnpackedFromDisk(t *testing.T) {
 	notes := Scan(Options{Home: home, GOOS: "linux"})
 	var fromDisk, unreadable bool
 	for _, n := range notes {
-		if strings.Contains(n.Title, "Disk Unpacked") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+		if strings.Contains(n.Title, "Disk Unpacked") && hasFlag(n.Findings, module.FlagWarn) {
 			fromDisk = true
 		}
-		if strings.Contains(n.Title, "gone") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+		if strings.Contains(n.Title, "gone") && hasFlag(n.Findings, module.FlagWarn) {
 			unreadable = true
 		}
 	}
@@ -120,8 +128,13 @@ func TestClassifySessions(t *testing.T) {
 	if len(tiers.cloud) != 0 {
 		t.Errorf("no cloud sessions expected: %+v", tiers.cloud)
 	}
-	if !hasFlag(tiers.findings(), module.FlagForceMultiplier) {
-		t.Error("idp sessions should be a force multiplier")
+	// Sessions are informational — being logged in is normal, not a finding.
+	fs := tiers.findings()
+	if len(fs) == 0 {
+		t.Fatal("expected session findings")
+	}
+	if hasFlag(fs, module.FlagForceMultiplier) || hasFlag(fs, module.FlagWarn) {
+		t.Errorf("browser sessions must be informational, not warn/fm: %+v", fs)
 	}
 }
 
@@ -169,18 +182,20 @@ func TestScanFixtureProfile(t *testing.T) {
 	notes := Scan(Options{Home: home, GOOS: "linux", Intrusive: true})
 	var gotExt, gotSess bool
 	for _, n := range notes {
-		if strings.Contains(n.Title, "Totally Legit") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+		// Unpacked extension → notable (warn provenance), not force multiplier.
+		if strings.Contains(n.Title, "Totally Legit") && hasFlag(n.Findings, module.FlagWarn) {
 			gotExt = true
 		}
-		if strings.Contains(n.Title, "browser sessions") && hasFlag(n.Findings, module.FlagForceMultiplier) {
+		// Session inventory present and informational (not warn/fm).
+		if strings.Contains(n.Title, "browser sessions") && !hasFlag(n.Findings, module.FlagWarn) && !hasFlag(n.Findings, module.FlagForceMultiplier) {
 			gotSess = true
 		}
 	}
 	if !gotExt {
-		t.Errorf("expected a force-multiplier extension Note: %+v", notes)
+		t.Errorf("expected the unpacked extension flagged warn: %+v", notes)
 	}
 	if !gotSess {
-		t.Errorf("expected a force-multiplier session Note: %+v", notes)
+		t.Errorf("expected an informational session Note: %+v", notes)
 	}
 	// The from_webstore-claiming extension without signed hashes must be reported
 	// as unverified (a warn provenance line), not silently trusted away.

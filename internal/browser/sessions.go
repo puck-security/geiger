@@ -34,7 +34,7 @@ func scanSessions(p profile) []module.Note {
 	return []module.Note{{
 		Title:    "browser sessions: " + p.browser + "/" + p.name,
 		Findings: tiers.findings(),
-		Summary:  "live sessions a malicious extension / infostealer would hijack",
+		Summary:  "live sessions present (normal) — the reach a malicious extension/infostealer would have",
 	}}
 }
 
@@ -189,10 +189,13 @@ func (t sessionTiers) findings() []module.Finding {
 		ks := keys(m)
 		out = append(out, module.Finding{Key: key, Value: note + ": " + strings.Join(ks, ", "), Flag: flag, Detail: ks})
 	}
-	add("idp/sso", "identity-provider sessions — hijacking one federates into everything behind it", module.FlagForceMultiplier, t.idp)
-	add("cloud console", "cloud console sessions", module.FlagForceMultiplier, t.cloud)
-	add("source control", "VCS sessions (push access / source)", module.FlagWarn, t.vcs)
-	add("collaboration", "collab/comms sessions", module.FlagWarn, t.collab)
+	// Informational — being logged in is normal. These are grouped by what a
+	// malicious extension would reach, highest-value first, but they are not a
+	// finding on their own.
+	add("idp/sso", "identity-provider sessions (federate into everything behind them)", module.FlagInfo, t.idp)
+	add("cloud console", "cloud console sessions", module.FlagInfo, t.cloud)
+	add("source control", "VCS sessions", module.FlagInfo, t.vcs)
+	add("collaboration", "collab/comms sessions", module.FlagInfo, t.collab)
 	return out
 }
 

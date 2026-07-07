@@ -67,8 +67,8 @@ func scanExtensions(p profile, live bool) []module.Note {
 			// expects it.
 			name = baseName(path, id)
 			findings = []module.Finding{{Key: "provenance",
-				Value: "unpacked/sideloaded — unsigned, NOT content-verified; manifest.json not readable (folder moved/removed?)", Flag: module.FlagForceMultiplier}}
-			risky, summary = true, "unpacked extension, manifest unreadable — verify why it's loaded"
+				Value: "unpacked/sideloaded — unsigned, not content-verified; manifest.json not readable (folder moved/removed?)", Flag: module.FlagWarn}}
+			risky, summary = true, "unpacked extension, manifest unreadable — verify why it is loaded"
 		default:
 			continue // no manifest and not sideloaded → nothing to report
 		}
@@ -220,23 +220,17 @@ func trustLevel(loc float64, verified bool) trust {
 	}
 }
 
-func worse(a, b module.FlagLevel) module.FlagLevel {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// scoreExtension is the pure capability model: given the manifest facts +
-// provenance, return findings, whether it's risky enough to report, the trust
-// level, and a one-line summary. Capability severity scales with provenance —
-// a sideloaded extension gets the full force-multiplier weight, a content-
-// verified Web Store one the same reach at near-info. This is the CursedChrome-
-// impact core, unit-tested directly.
+// scoreExtension returns findings, whether it's worth reporting, the trust
+// level, and a one-line summary. Design: the declared CAPABILITIES are
+// descriptive context (info) — a broad extension is normal. SEVERITY is driven
+// by PROVENANCE: a sideloaded/unverified extension is worth a look (warn); a
+// content-verified Web Store one is not (info). The one exception is the proxy
+// permission on unsigned code — the literal CursedChrome pivot — which is
+// force-multiplier grade. Sessions are handled separately and are always info.
 func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []module.Finding, risky bool, tr trust, summary string) {
 	perms := set(x.permissions...)
 	// MV2 folds host patterns into permissions; MV3 uses host_permissions. Also
-	// content-script matches count as host reach for warning purposes.
+	// content-script matches count as host reach.
 	hosts := append(append([]string{}, x.hostPerms...), x.contentMatch...)
 	if x.mv < 3 {
 		hosts = append(hosts, x.permissions...)
@@ -251,67 +245,74 @@ func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []mod
 	tabs := perms["tabs"]
 
 	tr = trustLevel(loc, verified)
-	capFlag := module.FlagInfo // Web Store / policy baseline
-	switch tr {
-	case trustSideloaded:
-		capFlag = module.FlagForceMultiplier
-	case trustUnknown:
-		capFlag = module.FlagWarn
-	}
-	emit := func(key, val string, floor module.FlagLevel) {
-		findings = append(findings, module.Finding{Key: key, Value: val, Flag: worse(capFlag, floor)})
+	provFlag := module.FlagInfo
+	if tr == trustSideloaded || tr == trustUnknown {
+		provFlag = module.FlagWarn
 	}
 
 	findings = append(findings, module.Finding{Key: "manifest", Value: "MV" + itoa(x.mv) + hostSummary(hosts), Flag: module.FlagInfo})
 
-	cursed := false
+	// Capabilities — descriptive (info). They say what an extension *could* do if
+	// malicious; they are not, by themselves, a finding.
+	reach := false
 	if broad && cookies {
-		emit("cookies", "reads every site's cookies including httpOnly/Secure session tokens — session theft across all logged-in sites", module.FlagInfo)
-		cursed = true
+		findings = append(findings, module.Finding{Key: "cookies", Value: "can read every site's cookies incl. httpOnly/Secure session tokens", Flag: module.FlagInfo})
+		reach = true
 	} else if cookies {
-		emit("cookies", "reads cookies (incl. httpOnly) for its host scope", module.FlagInfo)
+		findings = append(findings, module.Finding{Key: "cookies", Value: "can read cookies (incl. httpOnly) for its host scope", Flag: module.FlagInfo})
 	}
 	if broad && intercept {
-		emit("intercept", "observes/rewrites all web requests — Authorization and Cookie headers, on every site", module.FlagInfo)
-		cursed = true
+		findings = append(findings, module.Finding{Key: "intercept", Value: "can observe/rewrite web requests (Authorization/Cookie headers) on every site", Flag: module.FlagInfo})
+		reach = true
 	}
 	if broad && inject {
-		emit("inject", "injects scripts into every page — reads DOM, typed form input, and in-page tokens", module.FlagInfo)
-		cursed = true
+		findings = append(findings, module.Finding{Key: "inject", Value: "can inject scripts into every page (DOM, form input, in-page tokens)", Flag: module.FlagInfo})
+		reach = true
 	}
 	if proxy {
-		// A proxy permission is unusual and dangerous regardless of store trust.
-		emit("proxy", "proxy permission — can route traffic through this browser (CursedChrome-style authenticated pivot)", module.FlagWarn)
-		cursed = true
+		// The one genuine alarm: a browser-proxy permission on UNSIGNED code is the
+		// CursedChrome signature. On a signed Web Store extension it's still notable.
+		fl := module.FlagWarn
+		if tr == trustSideloaded {
+			fl = module.FlagForceMultiplier
+		}
+		findings = append(findings, module.Finding{Key: "proxy", Value: "requests the proxy permission — can route traffic through this browser (CursedChrome-style pivot)", Flag: fl})
+		reach = true
 	}
 	if native {
-		emit("native messaging", "bridges to a local host process — a covert C2 / exfiltration channel", module.FlagWarn)
+		fl := module.FlagInfo
+		if tr == trustSideloaded {
+			fl = module.FlagWarn
+		}
+		findings = append(findings, module.Finding{Key: "native messaging", Value: "can bridge to a local host process (potential C2 / exfil channel)", Flag: fl})
 	}
 	if tabs && !inject {
-		emit("tabs", "reads URL/title of every tab (cross-site browsing visibility)", module.FlagInfo)
+		findings = append(findings, module.Finding{Key: "tabs", Value: "reads URL/title of every tab", Flag: module.FlagInfo})
 	}
 
-	// Provenance — the finding that carries the weight.
+	// Provenance — the finding that sets severity.
 	locLabel, _ := chromeLocation(loc)
 	switch tr {
 	case trustSideloaded:
-		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — unsigned, NOT content-verified; sideloading is the primary malicious-extension vector", Flag: module.FlagForceMultiplier})
+		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — unsigned, not content-verified; verify why it is loaded", Flag: provFlag})
 	case trustUnknown:
-		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — claims Web Store origin but no signed verified_contents.json; verify provenance", Flag: module.FlagWarn})
+		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — claims Web Store origin but no signed verified_contents.json", Flag: provFlag})
 	case trustPolicy:
 		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — admin-managed", Flag: module.FlagInfo})
 	case trustWebstore:
-		findings = append(findings, module.Finding{Key: "provenance", Value: "Chrome Web Store, content-verified (Google-signed, tamper-detected)", Flag: module.FlagInfo})
+		findings = append(findings, module.Finding{Key: "provenance", Value: "Chrome Web Store, content-verified", Flag: module.FlagInfo})
 	}
 
-	// A sideloaded (unpacked) extension is always worth reporting — the provenance
-	// itself is the signal — even if its declared permissions are narrow.
-	risky = broad || cookies || intercept || proxy || native || tr == trustSideloaded
+	// Report a sideloaded extension regardless of permission breadth (provenance
+	// is the signal); report a Web Store one only if it has real reach.
+	risky = tr == trustSideloaded || broad || cookies || intercept || proxy || native
 	switch {
-	case cursed && tr == trustSideloaded:
-		summary = "SIDELOADED extension with total-browser reach — prime CursedChrome vector"
-	case cursed:
-		summary = "extension with broad browser reach — " + trustLabel(tr)
+	case tr == trustSideloaded && reach:
+		summary = "sideloaded extension with broad host + session access — verify"
+	case tr == trustSideloaded:
+		summary = "sideloaded (unpacked) extension — verify why it is loaded"
+	case reach:
+		summary = "extension with broad browser reach (" + trustLabel(tr) + ")"
 	default:
 		summary = "extension with notable browser permissions"
 	}
