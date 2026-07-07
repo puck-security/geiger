@@ -245,39 +245,30 @@ func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []mod
 	tabs := perms["tabs"]
 
 	tr = trustLevel(loc, verified)
-	provFlag := module.FlagInfo
-	if tr == trustSideloaded || tr == trustUnknown {
-		provFlag = module.FlagWarn
-	}
 
 	findings = append(findings, module.Finding{Key: "manifest", Value: "MV" + itoa(x.mv) + hostSummary(hosts), Flag: module.FlagInfo})
 
-	// Capabilities — descriptive (info). They say what an extension *could* do if
-	// malicious; they are not, by themselves, a finding.
-	reach := false
-	if broad && cookies {
-		findings = append(findings, module.Finding{Key: "cookies", Value: "can read every site's cookies incl. httpOnly/Secure session tokens", Flag: module.FlagInfo})
-		reach = true
-	} else if cookies {
-		findings = append(findings, module.Finding{Key: "cookies", Value: "can read cookies (incl. httpOnly) for its host scope", Flag: module.FlagInfo})
+	// Capabilities — descriptive context (info). They say what an extension COULD
+	// do; on trusted code that's normal, so they never set severity themselves.
+	if cookies {
+		v := "can read cookies (incl. httpOnly) for its host scope"
+		if broad {
+			v = "can read every site's cookies incl. httpOnly/Secure session tokens"
+		}
+		findings = append(findings, module.Finding{Key: "cookies", Value: v, Flag: module.FlagInfo})
 	}
 	if broad && intercept {
 		findings = append(findings, module.Finding{Key: "intercept", Value: "can observe/rewrite web requests (Authorization/Cookie headers) on every site", Flag: module.FlagInfo})
-		reach = true
 	}
 	if broad && inject {
 		findings = append(findings, module.Finding{Key: "inject", Value: "can inject scripts into every page (DOM, form input, in-page tokens)", Flag: module.FlagInfo})
-		reach = true
 	}
 	if proxy {
-		// The one genuine alarm: a browser-proxy permission on UNSIGNED code is the
-		// CursedChrome signature. On a signed Web Store extension it's still notable.
-		fl := module.FlagWarn
-		if tr == trustSideloaded {
-			fl = module.FlagForceMultiplier
+		fl := module.FlagInfo
+		if tr != trustSideloaded {
+			fl = module.FlagWarn // proxy on a "trusted" store extension is itself unusual
 		}
-		findings = append(findings, module.Finding{Key: "proxy", Value: "requests the proxy permission — can route traffic through this browser (CursedChrome-style pivot)", Flag: fl})
-		reach = true
+		findings = append(findings, module.Finding{Key: "proxy", Value: "requests the proxy permission — can route traffic through this browser", Flag: fl})
 	}
 	if native {
 		fl := module.FlagInfo
@@ -290,46 +281,43 @@ func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []mod
 		findings = append(findings, module.Finding{Key: "tabs", Value: "reads URL/title of every tab", Flag: module.FlagInfo})
 	}
 
-	// Provenance — the finding that sets severity.
+	// Severity = provenance × reach. All-sites access on UNSIGNED code is the
+	// CursedChrome mechanism itself — a service-worker fetch with <all_urls> host
+	// permission carries the victim's cookies, no proxy permission needed — so a
+	// sideloaded extension with broad host (or proxy) is the real alarm. The SAME
+	// reach on content-verified Web Store code is normal; a narrow sideloaded
+	// extension is worth a look but low.
+	reach := broad || proxy
 	locLabel, _ := chromeLocation(loc)
-	switch tr {
-	case trustSideloaded:
-		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — unsigned, not content-verified; verify why it is loaded", Flag: provFlag})
-	case trustUnknown:
-		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — claims Web Store origin but no signed verified_contents.json", Flag: provFlag})
-	case trustPolicy:
+	switch {
+	case tr == trustSideloaded && reach:
+		findings = append(findings, module.Finding{Key: "verdict",
+			Value: "UNSIGNED code with all-sites access — can read/modify/exfiltrate every site you're logged into (the CursedChrome mechanism); assume malicious until the source is verified",
+			Flag:  module.FlagForceMultiplier})
+		summary = "sideloaded extension with all-sites access — assume malicious until verified"
+	case tr == trustSideloaded:
+		findings = append(findings, module.Finding{Key: "provenance",
+			Value: locLabel + " — unsigned, not content-verified; narrow permissions, but verify why it is loaded", Flag: module.FlagWarn})
+		summary = "sideloaded (unpacked) extension — verify why it is loaded"
+	case tr == trustUnknown:
+		findings = append(findings, module.Finding{Key: "provenance",
+			Value: locLabel + " — claims Web Store origin but no signed verified_contents.json", Flag: module.FlagWarn})
+		summary = "extension with unverified origin — verify"
+	case tr == trustPolicy:
 		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — admin-managed", Flag: module.FlagInfo})
-	case trustWebstore:
+		summary = "admin-managed extension"
+	default: // trustWebstore
 		findings = append(findings, module.Finding{Key: "provenance", Value: "Chrome Web Store, content-verified", Flag: module.FlagInfo})
+		summary = "extension with notable browser permissions"
+		if reach {
+			summary = "extension with broad browser reach (Web Store, content-verified)"
+		}
 	}
 
 	// Report a sideloaded extension regardless of permission breadth (provenance
 	// is the signal); report a Web Store one only if it has real reach.
 	risky = tr == trustSideloaded || broad || cookies || intercept || proxy || native
-	switch {
-	case tr == trustSideloaded && reach:
-		summary = "sideloaded extension with broad host + session access — verify"
-	case tr == trustSideloaded:
-		summary = "sideloaded (unpacked) extension — verify why it is loaded"
-	case reach:
-		summary = "extension with broad browser reach (" + trustLabel(tr) + ")"
-	default:
-		summary = "extension with notable browser permissions"
-	}
 	return findings, risky, tr, summary
-}
-
-func trustLabel(tr trust) string {
-	switch tr {
-	case trustSideloaded:
-		return "sideloaded"
-	case trustUnknown:
-		return "unverified origin"
-	case trustPolicy:
-		return "admin-managed"
-	default:
-		return "Web Store, content-verified"
-	}
 }
 
 // broadHost reports whether any match pattern grants all-sites reach.

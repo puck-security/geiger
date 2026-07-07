@@ -24,42 +24,45 @@ func TestScoreExtension(t *testing.T) {
 		permissions: []string{"cookies", "webRequest", "scripting", "tabs"},
 		hostPerms:   []string{"<all_urls>"}}
 
-	// Broad reach, UNPACKED (sideloaded) → notable (warn provenance), but NOT a
-	// force multiplier: capability isn't malice. Capabilities are info.
-	broadCaps.name = "Evil"
+	// UNSIGNED code + all-sites access = the CursedChrome profile → force multiplier.
+	broadCaps.name = "CursedChrome"
 	fs, risky, tr, _ := scoreExtension(broadCaps, 4 /*unpacked*/, false)
 	if !risky || tr != trustSideloaded {
 		t.Fatalf("unpacked broad extension should be risky+sideloaded, got risky=%v tr=%v", risky, tr)
 	}
-	if hasFlag(fs, module.FlagForceMultiplier) {
-		t.Errorf("a sideloaded extension WITHOUT proxy must not be a force multiplier: %+v", fs)
-	}
-	if !hasFlag(fs, module.FlagWarn) {
-		t.Errorf("sideloaded provenance should be a warn: %+v", fs)
+	if !hasFlag(fs, module.FlagForceMultiplier) {
+		t.Errorf("sideloaded + all-sites access must be a force multiplier: %+v", fs)
 	}
 
-	// The one alarm: proxy permission on unsigned code → force multiplier.
-	withProxy := broadCaps
-	withProxy.permissions = append([]string{"proxy"}, broadCaps.permissions...)
-	if fs, _, _, _ := scoreExtension(withProxy, 4, false); !hasFlag(fs, module.FlagForceMultiplier) {
-		t.Errorf("sideloaded + proxy should be a force multiplier: %+v", fs)
-	}
-
-	// Same broad reach, Web Store + content-verified → info only (no warn/fm).
+	// SAME reach on content-verified Web Store code → info only (normal, like uBlock).
 	broadCaps.name = "uBlock"
-	fs, risky, tr, _ = scoreExtension(broadCaps, 1 /*webstore*/, true)
-	if !risky || tr != trustWebstore {
-		t.Fatalf("webstore broad extension should be risky+webstore, got risky=%v tr=%v", risky, tr)
+	fs, _, tr, _ = scoreExtension(broadCaps, 1 /*webstore*/, true)
+	if tr != trustWebstore {
+		t.Fatalf("expected trustWebstore, got %v", tr)
 	}
 	if hasFlag(fs, module.FlagForceMultiplier) || hasFlag(fs, module.FlagWarn) {
 		t.Errorf("content-verified Web Store extension should be info-only: %+v", fs)
 	}
 
-	// Narrow, silent-permission extension → not reportable.
+	// UNSIGNED but NARROW (a benign dev extension) → warn, NOT a force multiplier.
+	narrow := manifestFacts{name: "DevTool", mv: 3, permissions: []string{"storage", "tabs"},
+		hostPerms: []string{"http://localhost/*"}}
+	fs, risky, _, _ = scoreExtension(narrow, 4 /*unpacked*/, false)
+	if !risky {
+		t.Fatal("a sideloaded extension should be reported even when narrow")
+	}
+	if hasFlag(fs, module.FlagForceMultiplier) {
+		t.Errorf("narrow sideloaded extension must NOT be a force multiplier: %+v", fs)
+	}
+	if !hasFlag(fs, module.FlagWarn) {
+		t.Errorf("narrow sideloaded extension should be a warn: %+v", fs)
+	}
+
+	// Narrow, silent-permission, Web Store → not reportable.
 	benign := manifestFacts{name: "Nice", mv: 3, permissions: []string{"storage", "alarms"},
 		hostPerms: []string{"https://example.com/*"}}
 	if _, risky, _, _ := scoreExtension(benign, 1, true); risky {
-		t.Errorf("narrow extension should not be risky")
+		t.Errorf("narrow web store extension should not be risky")
 	}
 }
 
@@ -86,9 +89,11 @@ func TestScanUnpackedFromDisk(t *testing.T) {
 	notes := Scan(Options{Home: home, GOOS: "linux"})
 	var fromDisk, unreadable bool
 	for _, n := range notes {
-		if strings.Contains(n.Title, "Disk Unpacked") && hasFlag(n.Findings, module.FlagWarn) {
+		// unpacked + <all_urls> → force multiplier (CursedChrome profile)
+		if strings.Contains(n.Title, "Disk Unpacked") && hasFlag(n.Findings, module.FlagForceMultiplier) {
 			fromDisk = true
 		}
+		// missing-folder unpacked (reach unknown) → warn IOC
 		if strings.Contains(n.Title, "gone") && hasFlag(n.Findings, module.FlagWarn) {
 			unreadable = true
 		}
@@ -182,8 +187,8 @@ func TestScanFixtureProfile(t *testing.T) {
 	notes := Scan(Options{Home: home, GOOS: "linux", Intrusive: true})
 	var gotExt, gotSess bool
 	for _, n := range notes {
-		// Unpacked extension → notable (warn provenance), not force multiplier.
-		if strings.Contains(n.Title, "Totally Legit") && hasFlag(n.Findings, module.FlagWarn) {
+		// Unpacked + <all_urls> = CursedChrome profile → force multiplier.
+		if strings.Contains(n.Title, "Totally Legit") && hasFlag(n.Findings, module.FlagForceMultiplier) {
 			gotExt = true
 		}
 		// Session inventory present and informational (not warn/fm).
