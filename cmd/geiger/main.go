@@ -500,16 +500,26 @@ func printIntrusiveHint(stderr io.Writer, results []pipeline.Result, c config) {
 func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c config) {
 	var tiers []string
 	counts := map[score.Tier]int{}
-	var rotateFirst []string
-	var secretsStore, cantChar, dead, hidden int
+	var rotateFirst, investigate []string
+	var secretsStore, cantChar, dead, hidden, browserCount int
 	for _, r := range results {
 		tier := score.TierFor(r.Note, ctx)
 		counts[tier]++
 		if score.Rank(tier) < c.minSevRank {
 			hidden++
 		}
+		// Browser notes are capability/blast-radius findings, not credentials —
+		// the action is investigate/remove, not rotate.
+		browser := isBrowserNote(r.Note.Title)
+		if browser {
+			browserCount++
+		}
 		if tier == score.TierCritical || tier == score.TierHigh {
-			rotateFirst = append(rotateFirst, note.Sanitize(firstField(r.Note.Title)))
+			if browser {
+				investigate = append(investigate, note.Sanitize(browserLabel(r.Note.Title)))
+			} else {
+				rotateFirst = append(rotateFirst, note.Sanitize(firstField(r.Note.Title)))
+			}
 		}
 		if r.Note.Invalid {
 			dead++
@@ -520,10 +530,12 @@ func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c c
 				break
 			}
 		}
-		for _, f := range r.Note.Findings {
-			if f.Flag == gmodule.FlagForceMultiplier && readsSecretsStore(f.Value) {
-				secretsStore++
-				break
+		if !browser {
+			for _, f := range r.Note.Findings {
+				if f.Flag == gmodule.FlagForceMultiplier && readsSecretsStore(f.Value) {
+					secretsStore++
+					break
+				}
 			}
 		}
 	}
@@ -533,12 +545,23 @@ func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c c
 		}
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "── summary ── %d credentials: %s\n", len(results), strings.Join(tiers, "  "))
+	noun := "credentials"
+	if credCount := len(results) - browserCount; browserCount > 0 {
+		if credCount == 0 {
+			noun = "browser findings"
+		} else {
+			noun = "findings"
+		}
+	}
+	fmt.Fprintf(w, "── summary ── %d %s: %s\n", len(results), noun, strings.Join(tiers, "  "))
 	if hidden > 0 {
 		fmt.Fprintf(w, "  %d below %s hidden (--min-severity)\n", hidden, strings.ToLower(c.minSeverity))
 	}
 	if len(rotateFirst) > 0 {
 		fmt.Fprintf(w, "  rotate first: %s\n", strings.Join(rotateFirst, ", "))
+	}
+	if len(investigate) > 0 {
+		fmt.Fprintf(w, "  investigate first: %s\n", strings.Join(investigate, ", "))
 	}
 	if secretsStore > 0 {
 		fmt.Fprintf(w, "  %d reach a secrets store — rotate downstream creds too (or re-run --live --intrusive to harvest)\n", secretsStore)
@@ -555,6 +578,21 @@ func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c c
 // "(from …)" provenance) for a compact rotate-first list.
 func firstField(title string) string {
 	if i := strings.Index(title, " (from "); i > 0 {
+		return title[:i]
+	}
+	return title
+}
+
+// isBrowserNote reports whether a note is a --browser capability/blast-radius
+// finding (not a credential to rotate).
+func isBrowserNote(title string) bool {
+	return strings.HasPrefix(title, "browser extension:") || strings.HasPrefix(title, "browser sessions:")
+}
+
+// browserLabel is a compact browser-note label for the investigate-first line
+// (drops the "(browser/profile · id · location)" tail).
+func browserLabel(title string) string {
+	if i := strings.Index(title, " ("); i > 0 {
 		return title[:i]
 	}
 	return title
