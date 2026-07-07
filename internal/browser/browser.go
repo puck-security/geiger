@@ -27,6 +27,7 @@ import (
 
 // Options configures a scan. Home and GOOS are injectable for tests.
 type Options struct {
+	Live      bool   // permit the network Web Store liveness check on store extensions
 	Intrusive bool   // read the Cookies DB metadata (the sensitive session inventory)
 	Home      string // override home dir (tests); defaults to os.UserHomeDir
 	GOOS      string // override runtime.GOOS (tests)
@@ -45,7 +46,7 @@ func Scan(o Options) []module.Note {
 	}
 	var notes []module.Note
 	for _, p := range discoverProfiles(o) {
-		notes = append(notes, scanExtensions(p)...)
+		notes = append(notes, scanExtensions(p, o.Live)...)
 		if o.Intrusive {
 			notes = append(notes, scanSessions(p)...)
 		}

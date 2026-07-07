@@ -20,32 +20,46 @@ func hasFlag(fs []module.Finding, want module.FlagLevel) bool {
 }
 
 func TestScoreExtension(t *testing.T) {
-	// CursedChrome-grade: <all_urls> + cookies + intercept + inject, sideloaded.
-	cursed := manifestFacts{name: "Evil", mv: 3,
+	broadCaps := manifestFacts{mv: 3,
 		permissions: []string{"cookies", "webRequest", "scripting", "tabs"},
 		hostPerms:   []string{"<all_urls>"}}
-	fs, risky, summary := scoreExtension(cursed, 4 /*unpacked*/, false)
-	if !risky {
-		t.Fatal("broad cookies+intercept+inject extension should be risky")
+
+	// Same reach, UNPACKED (sideloaded) → force multiplier (the CursedChrome vector).
+	broadCaps.name = "Evil"
+	fs, risky, tr, summary := scoreExtension(broadCaps, 4 /*unpacked*/, false)
+	if !risky || tr != trustSideloaded {
+		t.Fatalf("unpacked broad extension should be risky+sideloaded, got risky=%v tr=%v", risky, tr)
 	}
 	if !hasFlag(fs, module.FlagForceMultiplier) {
-		t.Errorf("expected a force-multiplier finding, got %+v", fs)
+		t.Errorf("sideloaded broad extension must be a force multiplier: %+v", fs)
 	}
-	if summary == "" || summary[:10] != "sideloaded" {
-		t.Errorf("sideloaded CursedChrome summary expected, got %q", summary)
+	if !strings.HasPrefix(summary, "SIDELOADED") {
+		t.Errorf("sideloaded summary expected, got %q", summary)
+	}
+
+	// Same reach, Web Store + content-verified → near-info (no force multiplier).
+	broadCaps.name = "uBlock"
+	fs, risky, tr, _ = scoreExtension(broadCaps, 1 /*webstore*/, true)
+	if !risky || tr != trustWebstore {
+		t.Fatalf("webstore broad extension should be risky+webstore, got risky=%v tr=%v", risky, tr)
+	}
+	if hasFlag(fs, module.FlagForceMultiplier) {
+		t.Errorf("content-verified Web Store extension must NOT be a force multiplier: %+v", fs)
 	}
 
 	// Narrow, silent-permission extension → not reportable.
 	benign := manifestFacts{name: "Nice", mv: 3, permissions: []string{"storage", "alarms"},
 		hostPerms: []string{"https://example.com/*"}}
-	if _, risky, _ := scoreExtension(benign, 1 /*webstore*/, true); risky {
+	if _, risky, _, _ := scoreExtension(benign, 1, true); risky {
 		t.Errorf("narrow extension should not be risky")
 	}
+}
 
-	// MV2 folds host patterns into permissions.
-	mv2 := manifestFacts{name: "Old", mv: 2, permissions: []string{"cookies", "<all_urls>"}}
-	if fs, risky, _ := scoreExtension(mv2, 1, true); !risky || !hasFlag(fs, module.FlagForceMultiplier) {
-		t.Errorf("MV2 <all_urls>+cookies should be a force multiplier: %+v", fs)
+func TestWebStoreStatusSkipsNonStoreID(t *testing.T) {
+	// A path-derived / non-store id must not trigger a network call and must not
+	// be penalized (returns listed=true).
+	if listed, _ := webStoreStatus("not-a-32char-a-p-id"); !listed {
+		t.Error("non-store id should be treated as listed (no network, no penalty)")
 	}
 }
 

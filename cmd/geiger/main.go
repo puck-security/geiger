@@ -171,7 +171,7 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 	var extra []pipeline.Result
 	if c.browser {
 		st.update("scanning browser profiles…")
-		for _, n := range browser.Scan(browser.Options{Intrusive: c.intrusive}) {
+		for _, n := range browser.Scan(browser.Options{Live: c.live, Intrusive: c.intrusive}) {
 			extra = append(extra, pipeline.ResultFromNote(n))
 		}
 		st.clear()
