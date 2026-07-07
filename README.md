@@ -157,9 +157,13 @@ under `--intrusive`, its LevelDB storage) for hardcoded remote hosts (websocket 
 public-IP endpoints) to **verify against egress/DNS logs**. Everything is emitted
 as clean IOCs in `--json` (`detail` arrays) for a SIEM.
 
+By default only extensions with risky reach are shown; narrow/benign ones are
+collapsed into a count. `--all` lists every installed extension (a full inventory).
+
 ```sh
 geiger --browser                    # score extensions + triage bundle
 geiger --browser --live --intrusive # + session inventory + storage IOC grep
+geiger --browser --all              # full inventory (incl. narrow/benign)
 geiger --browser --json             # IOCs (extension id, hosts) for a SIEM
 ```
 

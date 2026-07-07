@@ -34,12 +34,12 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse, useMetadata, browser bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                           string
-	userAgent, minSeverity, output                                                                                           string
-	timeout                                                                                                                  time.Duration
-	concurrency, minSevRank                                                                                                  int
-	args                                                                                                                     []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse, useMetadata, browser, allExts bool
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                                    string
+	userAgent, minSeverity, output                                                                                                    string
+	timeout                                                                                                                           time.Duration
+	concurrency, minSevRank                                                                                                           int
+	args                                                                                                                              []string
 }
 
 func main() {
@@ -51,6 +51,7 @@ func main() {
 	flag.BoolVar(&c.useEnv, "env", false, "read credentials from the current environment variables")
 	flag.BoolVar(&c.useMetadata, "metadata", false, "harvest cloud instance-metadata credentials (AWS/GCP/Azure/k8s/…) and triage them (requires --live)")
 	flag.BoolVar(&c.browser, "browser", false, "model malicious-browser-extension impact: score installed Chrome/Edge extensions' permissions and (with --live --intrusive) inventory the live sessions they'd reach")
+	flag.BoolVar(&c.allExts, "all", false, "with --browser, list every extension (incl. narrow/benign ones) instead of collapsing them into a count")
 	flag.StringVar(&c.endpoint, "endpoint", "", "tenant/instance/host for set-shaped credentials")
 	flag.StringVar(&c.proxy, "proxy", "", "route HTTP recon through a proxy (http/https/socks5 URL)")
 	flag.StringVar(&c.fromGitleaks, "from-gitleaks", "", "ingest a gitleaks JSON report and triage each finding")
@@ -171,7 +172,7 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 	var extra []pipeline.Result
 	if c.browser {
 		st.update("scanning browser profiles…")
-		for _, n := range browser.Scan(browser.Options{Live: c.live, Intrusive: c.intrusive, Proxy: c.proxy}) {
+		for _, n := range browser.Scan(browser.Options{Live: c.live, Intrusive: c.intrusive, All: c.allExts, Proxy: c.proxy}) {
 			extra = append(extra, pipeline.ResultFromNote(n))
 		}
 		st.clear()
@@ -690,6 +691,7 @@ flags:
   --metadata          harvest cloud instance-metadata creds (AWS/GCP/Azure/k8s/…); needs --live
   --browser           model malicious-extension impact: score Chrome/Edge extensions;
                       with --live --intrusive, inventory the live sessions they'd reach
+  --all               with --browser, list every extension (not just the risky ones)
   --endpoint URL      tenant/instance/host for set-shaped credentials
   --proxy URL         route HTTP recon through a proxy (http/https/socks5)
   --timeout DUR       per-credential recon timeout (default 15s)

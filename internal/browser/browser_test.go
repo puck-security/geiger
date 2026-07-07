@@ -106,6 +106,49 @@ func TestScanUnpackedFromDisk(t *testing.T) {
 	}
 }
 
+func containsTitle(notes []module.Note, sub string) bool {
+	for _, n := range notes {
+		if strings.Contains(n.Title, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAllListsBenignAndCollapseIsWeightless(t *testing.T) {
+	home := t.TempDir()
+	prof := filepath.Join(home, ".config", "google-chrome", "Default")
+	if err := os.MkdirAll(prof, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prefs := `{"extensions":{"settings":{
+		"aaaabbbbccccddddeeeeffffgggghhhh":{"state":1,"location":4,"manifest":{"name":"Risky","manifest_version":3,"host_permissions":["<all_urls>"]}},
+		"bbbbccccddddeeeeffffgggghhhhiiii":{"state":1,"location":1,"manifest":{"name":"Benign One","manifest_version":3,"permissions":["storage"]}},
+		"ccccddddeeeeffffgggghhhhiiiijjjj":{"state":1,"location":1,"manifest":{"name":"Benign Two","manifest_version":3,"permissions":["alarms"]}}}}}`
+	if err := os.WriteFile(filepath.Join(prof, "Preferences"), []byte(prefs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: benign extensions are collapsed, not listed, and the "also installed"
+	// context line must be weightless (FlagNone) so it never bumps a note's tier.
+	def := Scan(Options{Home: home, GOOS: "linux"})
+	if containsTitle(def, "Benign One") {
+		t.Errorf("benign extension should be collapsed by default: %+v", def)
+	}
+	for _, n := range def {
+		for _, f := range n.Findings {
+			if f.Key == "also installed" && f.Flag != module.FlagNone {
+				t.Errorf("'also installed' must be FlagNone (never inflates the tier), got %v", f.Flag)
+			}
+		}
+	}
+	// --all: every extension is listed.
+	all := Scan(Options{Home: home, GOOS: "linux", All: true})
+	if !containsTitle(all, "Benign One") || !containsTitle(all, "Benign Two") {
+		t.Errorf("--all should list benign extensions: %+v", all)
+	}
+}
+
 func TestGrantedNarrowsReach(t *testing.T) {
 	home := t.TempDir()
 	prof := filepath.Join(home, ".config", "google-chrome", "Default")

@@ -18,7 +18,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // authoritative registry — it also lists unpacked, external, and policy
 // extensions the Extensions/ folder alone would miss) and returns a Note per
 // extension whose permission union is risky.
-func scanExtensions(p profile, live, intrusive bool, cws *http.Client) []module.Note {
+func scanExtensions(p profile, o Options, cws *http.Client) []module.Note {
 	settings := map[string]map[string]any{}
 	for _, f := range []string{"Preferences", "Secure Preferences"} {
 		mergeExtSettings(filepath.Join(p.dir, f), settings)
@@ -81,41 +81,50 @@ func scanExtensions(p profile, live, intrusive bool, cws *http.Client) []module.
 		}
 		if !risky {
 			benign++
-			continue
-		}
-		// Cheap benign-ness check: a "Web Store" extension that's no longer listed
-		// (removed/delisted) is a strong IOC. Only under --live (a network call),
-		// and only for store-claimed extensions (sideloaded ones have no listing).
-		if live && (tr == trustWebstore || tr == trustUnknown) {
-			if listed, note := webStoreStatus(id, cws); !listed {
-				findings = append(findings, module.Finding{Key: "web store", Value: note + " — but still installed here", Flag: module.FlagWarn})
-				summary = "installed extension NOT in the public Web Store — verify"
+			if !o.All {
+				continue // narrow/benign — collapsed into a count unless --all
 			}
+			summary = "extension inventory — narrow/benign permissions"
 		}
-		// The on-disk source of a sideloaded extension is a key IOC.
-		if path != "" && tr == trustSideloaded {
-			findings = append(findings, module.Finding{Key: "source", Value: "loaded from " + path, Flag: module.FlagInfo})
-		}
-		// Responder triage bundle for the ambiguous cases (sideloaded / unknown
-		// origin) — provenance context + a low-FP grep for hardcoded remote hosts.
-		if tr == trustSideloaded || tr == trustUnknown {
-			srcDir, external := path, true
-			if srcDir == "" {
-				srcDir, external = extensionCodeDir(p.dir, id), false
+		// Risky-only enrichment (the benign inventory entries stop at manifest +
+		// provenance).
+		if risky {
+			// Cheap benign-ness check: a "Web Store" extension that's no longer listed
+			// (removed/delisted) is a strong IOC. Only under --live (a network call),
+			// and only for store-claimed extensions (sideloaded ones have no listing).
+			if o.Live && (tr == trustWebstore || tr == trustUnknown) {
+				if listed, note := webStoreStatus(id, cws); !listed {
+					findings = append(findings, module.Finding{Key: "web store", Value: note + " — but still installed here", Flag: module.FlagWarn})
+					summary = "installed extension NOT in the public Web Store — verify"
+				}
 			}
-			findings = append(findings, triageFindings(triageInput{
-				profileDir: p.dir, id: id, srcDir: srcDir, external: external,
-				manifest: mani, intrusive: intrusive,
-			})...)
+			// The on-disk source of a sideloaded extension is a key IOC.
+			if path != "" && tr == trustSideloaded {
+				findings = append(findings, module.Finding{Key: "source", Value: "loaded from " + path, Flag: module.FlagInfo})
+			}
+			// Responder triage bundle for the ambiguous cases (sideloaded / unknown
+			// origin) — provenance context + a low-FP grep for hardcoded remote hosts.
+			if tr == trustSideloaded || tr == trustUnknown {
+				srcDir, external := path, true
+				if srcDir == "" {
+					srcDir, external = extensionCodeDir(p.dir, id), false
+				}
+				findings = append(findings, triageFindings(triageInput{
+					profileDir: p.dir, id: id, srcDir: srcDir, external: external,
+					manifest: mani, intrusive: o.Intrusive,
+				})...)
+			}
 		}
 		locLabel, _ := chromeLocation(loc)
 		title := "browser extension: " + name + " (" + p.browser + "/" + p.name + " · " + id[:min(8, len(id))] + " · " + locLabel + ")"
 		notes = append(notes, module.Note{Title: title, Findings: findings, Summary: summary})
 	}
-	// A one-line context note so the operator knows the rest were checked.
-	if benign > 0 && len(notes) > 0 {
+	// A one-line context note so the operator knows the rest were checked. It is
+	// meta-context, not severity — FlagNone (score 0) so it never tips the tier of
+	// whichever note it rides on. Omitted under --all (they're all listed).
+	if benign > 0 && !o.All && len(notes) > 0 {
 		notes[len(notes)-1].Findings = append(notes[len(notes)-1].Findings, module.Finding{
-			Key: "also installed", Value: itoa(benign) + " other extension(s) with narrow/benign permissions (not shown)", Flag: module.FlagInfo})
+			Key: "also installed", Value: itoa(benign) + " other extension(s) with narrow/benign permissions (not shown; --all lists them)", Flag: module.FlagNone})
 	}
 	return notes
 }
@@ -339,8 +348,8 @@ func scoreExtension(x manifestFacts, loc float64, verified bool) (findings []mod
 			Value: locLabel + " — claims Web Store origin but no signed verified_contents.json", Flag: module.FlagWarn})
 		summary = "extension with unverified origin — verify"
 	case tr == trustPolicy:
-		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — admin-managed", Flag: module.FlagInfo})
-		summary = "admin-managed extension"
+		findings = append(findings, module.Finding{Key: "provenance", Value: locLabel + " — centrally managed (device policy)", Flag: module.FlagInfo})
+		summary = "policy-managed extension"
 	default: // trustWebstore
 		findings = append(findings, module.Finding{Key: "provenance", Value: "Chrome Web Store, content-verified", Flag: module.FlagInfo})
 		summary = "extension with notable browser permissions"
