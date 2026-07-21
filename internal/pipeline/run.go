@@ -463,7 +463,7 @@ func httpClient(timeout time.Duration, proxy string) (*http.Client, error) {
 		}
 		tr.Proxy = http.ProxyURL(u)
 	}
-	return &http.Client{Timeout: timeout, Transport: tr}, nil
+	return &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: recon.CheckRedirect}, nil
 }
 
 func dryRunNote(title string, n int) module.Note {
