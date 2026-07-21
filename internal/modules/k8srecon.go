@@ -29,8 +29,9 @@ func k8sRecon(ctx context.Context, live, intrusive bool, server, token, caData s
 		}
 	}
 	hc := &http.Client{
-		Timeout:   12 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsConf, DialContext: recon.GuardedDial},
+		Timeout:       12 * time.Second,
+		Transport:     &http.Transport{TLSClientConfig: tlsConf, DialContext: recon.GuardedDial},
+		CheckRedirect: recon.CheckRedirect,
 	}
 	c := recon.New(hc, live)
 	c.SetIntrusive(intrusive)

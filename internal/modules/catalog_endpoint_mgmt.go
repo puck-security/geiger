@@ -45,13 +45,18 @@ func normalizeURL(h string) string {
 	return h
 }
 
-// resolveEndpoint picks the first non-empty host from the named env vars, else
-// the --endpoint flag value.
+// resolveEndpoint picks the host to triage against: the operator's --endpoint
+// flag if given, else the first non-empty of the named env vars.
+//
+// The flag wins deliberately. It is an explicit operator assertion, while a
+// value read out of the scanned blob is untrusted input that an attacker may
+// have planted; letting the file outrank the flag would mean the operator can
+// name a host and still have geiger send the credential somewhere else.
 func resolveEndpoint(b parse.Blob, endpoint string, envNames ...string) string {
-	if h := firstVar(b.Vars, envNames...); h != "" {
-		return normalizeURL(h)
+	if endpoint != "" {
+		return normalizeURL(endpoint)
 	}
-	return normalizeURL(endpoint)
+	return normalizeURL(firstVar(b.Vars, envNames...))
 }
 
 // staticOr returns a static token as a PreAuthed bearer when present, otherwise

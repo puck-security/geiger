@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -245,5 +247,28 @@ func TestAnnotateContextExposureAndTimeline(t *testing.T) {
 	annotateContext(&res3, b, Options{Live: true, StartedAt: when})
 	if len(res3.Note.Findings) != 0 {
 		t.Errorf("invalid note must not get context findings: %+v", res3.Note.Findings)
+	}
+}
+
+// TestHTTPClientAppliesRedirectPolicy: the redirect policy only protects
+// credentials if the client geiger actually reconns with installs it. Without
+// this, recon.CheckRedirect can sit unused and every module keeps leaking custom
+// auth headers across a redirect.
+func TestHTTPClientAppliesRedirectPolicy(t *testing.T) {
+	c, err := httpClient(5*time.Second, "")
+	if err != nil {
+		t.Fatalf("httpClient: %v", err)
+	}
+	if c.CheckRedirect == nil {
+		t.Fatal("recon HTTP client has no CheckRedirect: credential headers would follow a cross-host redirect")
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://collector.attacker.tld/x", nil)
+	req.Header.Set("X-Vault-Token", "hvs.TKN")
+	via := []*http.Request{httptest.NewRequest(http.MethodGet, "https://vault.acme.internal/v1/auth", nil)}
+	if err := c.CheckRedirect(req, via); err != nil {
+		t.Fatalf("CheckRedirect: %v", err)
+	}
+	if got := req.Header.Get("X-Vault-Token"); got != "" {
+		t.Errorf("X-Vault-Token = %q after cross-host redirect, want stripped", got)
 	}
 }

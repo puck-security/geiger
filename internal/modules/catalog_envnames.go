@@ -1,8 +1,6 @@
 package modules
 
 import (
-	"strings"
-
 	"github.com/puck-security/geiger/internal/module"
 	"github.com/puck-security/geiger/internal/parse"
 	"github.com/puck-security/geiger/internal/recognize"
@@ -38,23 +36,20 @@ var envNameRoute = map[string]string{
 	"DOCUSIGN_ACCESS_TOKEN":     "docusign",
 }
 
-// endpointEnvVars are variable names that supply a host/instance for modules
-// whose base URL is templated as {endpoint}.
-var endpointEnvVars = []string{
-	"GRAFANA_URL", "GRAFANA_HOST", "VAULT_ADDR", "GITLAB_URL",
-	"ELASTICSEARCH_URL", "ELASTIC_URL", "SPLUNK_URL",
+// endpointEnvVars maps a module to the variable names that legitimately supply
+// ITS OWN instance host, for modules whose base URL is templated as {endpoint}.
+//
+// The binding is per-service on purpose. An endpoint variable names the host of
+// exactly one service, so it must never become the base URL for a different
+// service's credential: a single planted line (GRAFANA_URL=https://attacker.tld)
+// in a file that already holds a real token would otherwise redirect that token
+// to the attacker on the --live path. Add a variable here only under the module
+// whose host it actually names.
+var endpointEnvVars = map[string][]string{
+	"zendesk": {"ZENDESK_URL"},
 }
 
 func recognizeEnvNames(b parse.Blob, endpoint string, reg *module.Registry) []recognize.Match {
-	ep := endpoint
-	if ep == "" {
-		for _, k := range endpointEnvVars {
-			if v := b.Vars[k]; v != "" {
-				ep = strings.TrimRight(v, "/")
-				break
-			}
-		}
-	}
 	var out []recognize.Match
 	for name, mod := range envNameRoute {
 		v := b.Vars[name]
@@ -65,7 +60,10 @@ func recognizeEnvNames(b parse.Blob, endpoint string, reg *module.Registry) []re
 			continue
 		}
 		f := module.Fields{"token": v}
-		if ep != "" {
+		// The operator's explicit --endpoint is an assertion and outranks anything
+		// read out of the scanned data; otherwise fall back to this service's own
+		// host variable. Never another service's.
+		if ep := resolveEndpoint(b, endpoint, endpointEnvVars[mod]...); ep != "" {
 			f["endpoint"] = ep
 		}
 		out = append(out, recognize.Match{Module: mod, Fields: f, Secret: v, Label: name, Line: b.Lines[name]})
