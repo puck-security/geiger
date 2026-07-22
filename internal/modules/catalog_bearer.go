@@ -106,7 +106,7 @@ func init() {
 
 	// ---- Observability ----
 	add("grafana-service-account-token", r.HTTP{
-		ModuleName: "grafana", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "grafana", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami: r.Call{Method: "GET", Path: "/api/user",
 			Fields: []r.Extract{{Key: "login", Path: "login"}, {Key: "email", Path: "email"}},
 			Signals: []r.Signal{{Path: "isGrafanaAdmin", Contains: "true",

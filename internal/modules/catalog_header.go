@@ -100,7 +100,7 @@ func init() {
 	}.Module())
 
 	add("", r.HTTP{
-		ModuleName: "dynatrace", Base: "{endpoint}",
+		ModuleName: "dynatrace", Endpoint: saasOnly("dynatrace.com", "dynatracelabs.com"), Base: "{endpoint}",
 		Auth:   r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "Api-Token "},
 		Accept: "application/json",
 		Whoami: r.Call{
@@ -194,7 +194,7 @@ func init() {
 	}.Module())
 
 	add("zendesk", r.HTTP{
-		ModuleName: "zendesk", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "zendesk", Endpoint: saasOnly("zendesk.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami: r.Call{Method: "GET", Path: "/api/v2/users/me",
 			Fields:  []r.Extract{{Key: "name", Path: "user.name"}, {Key: "role", Path: "user.role"}},
 			Signals: []r.Signal{{Path: "user.role", Contains: "admin", Key: "privilege", Value: "Zendesk admin", Flag: fmFlag}}},
@@ -202,7 +202,7 @@ func init() {
 
 	// ---- Secrets / identity ----
 	add("vault-service-token", r.HTTP{
-		ModuleName: "vault", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "X-Vault-Token"},
+		ModuleName: "vault", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "X-Vault-Token"},
 		Whoami: r.GET("/v1/auth/token/lookup-self").Field("display_name", "data.display_name").
 			FlagField("policies", "data.policies", fmFlag).Field("ttl", "data.ttl"),
 		Static: []module.Finding{{Key: "note", Value: "root/* policy = total compromise; any secret-engine read = secrets-store reach", Flag: infoFlag}},
@@ -210,14 +210,14 @@ func init() {
 	module.MapRule("vault-batch-token", "vault")
 
 	add("okta-access-token", r.HTTP{
-		ModuleName: "okta", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "SSWS "},
+		ModuleName: "okta", Endpoint: saasOnly("okta.com", "oktapreview.com", "okta-emea.com", "okta-gov.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "SSWS "},
 		Whoami: r.GET("/api/v1/users/me").Field("login", "profile.login").Field("status", "status"),
 		Static: []module.Finding{{Key: "note", Value: "SSWS inherits creating admin's rights; super_admin = IdP takeover", Flag: infoFlag}},
 	}.Module())
 
 	// ---- Data platforms ----
 	add("databricks-api-token", r.HTTP{
-		ModuleName: "databricks", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "databricks", Endpoint: saasOnly("databricks.com", "azuredatabricks.net"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami: r.GET("/api/2.0/preview/scim/v2/Me").Field("userName", "userName").Field("displayName", "displayName").
 			Signal(r.Signal{Path: "groups.0.display", Contains: "admin", Key: "privilege", Value: "member of admins group", Flag: fmFlag}),
 		Calls: []r.Call{
@@ -234,7 +234,7 @@ func init() {
 	}.Module())
 
 	add("jfrog-api-key", r.HTTP{
-		ModuleName: "jfrog", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "Bearer "},
+		ModuleName: "jfrog", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "Bearer "},
 		Whoami: r.GET("/artifactory/api/system/ping").Field("status", ""),
 		Static: []module.Finding{{Key: "note", Value: "package registry — publish rights are a supply-chain force multiplier", Flag: fmFlag}},
 	}.Module())

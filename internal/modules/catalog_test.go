@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -78,5 +79,48 @@ func TestSummarizeEmptyIsInvalid(t *testing.T) {
 func TestCatalogHasBreadth(t *testing.T) {
 	if got := len(module.Default.All()); got < 40 {
 		t.Errorf("expected a broad catalog, only %d modules registered", got)
+	}
+}
+
+// TestEveryEndpointSteeredModuleDeclaresAPolicy is the class guard for
+// credential exfiltration via a planted URL.
+//
+// A module whose calls are aimed by a URL-valued field takes its destination
+// from scanned data, which an attacker may have planted. Such a module MUST
+// declare a module.EndpointPolicy so recognize.enforceEndpointPolicy can decide
+// whether a given host is legitimate — SelfHosted for anything deployable at an
+// arbitrary domain, HostSuffixes for a SaaS-only vendor.
+//
+// Detection is behavioural, not structural: we point every URL-valued field at a
+// sentinel host and see whether any call the module plans — in Authenticate as
+// well as Recon — ends up aimed there. That catches hand-written modules and
+// token-exchange hooks, which is exactly where an earlier round of point-fixes
+// (recipe.renderBase alone) failed to reach.
+func TestEveryEndpointSteeredModuleDeclaresAPolicy(t *testing.T) {
+	const sentinel = "sentinel.invalid"
+	for _, m := range module.Default.All() {
+		c := recon.New(nil, false) // dry-run: records, never dials
+		f := dummyFields()
+		for _, k := range module.URLValuedFields {
+			f[k] = "https://" + sentinel
+		}
+		tok, _ := m.Authenticate(context.Background(), c, f)
+		_, _ = m.Recon(context.Background(), c, tok, f)
+
+		steered := false
+		for _, p := range c.Planned() {
+			if strings.Contains(p.URL, sentinel) {
+				steered = true
+				break
+			}
+		}
+		if !steered {
+			continue // destination is hardcoded; nothing for a policy to decide
+		}
+		es, ok := m.(module.EndpointScoped)
+		if !ok || !es.EndpointPolicy().Declared() {
+			t.Errorf("module %s aims its calls with a URL-valued field but declares no EndpointPolicy; "+
+				"add Endpoint: module.EndpointPolicy{...} (SelfHosted, or HostSuffixes for a SaaS-only vendor)", m.Name())
+		}
 	}
 }

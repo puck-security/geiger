@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -145,6 +146,10 @@ type HTTP struct {
 	Auth       AuthSpec
 	Whoami     Call
 	Calls      []Call // additional inventory/count calls
+	// Endpoint declares where this module's credential may legitimately be sent.
+	// Required for any spec whose Base is templated on a URL-valued field; the
+	// catalog guard test fails without it. See module.EndpointPolicy.
+	Endpoint module.EndpointPolicy
 	// MultiScope marks an API where the whoami can 401 for a token that is still
 	// live against a different scope (e.g. Cloudflare's user-scoped
 	// /user/tokens/verify rejects an account/zone-scoped token). For these we keep
@@ -185,6 +190,9 @@ type recipeModule struct {
 
 func (m *recipeModule) Name() string { return m.name }
 
+// EndpointPolicy exposes the spec's declared policy to the recognize-time guard.
+func (m *recipeModule) EndpointPolicy() module.EndpointPolicy { return m.spec.Endpoint }
+
 // Authenticate runs the optional token-exchange hook.
 func (m *recipeModule) Authenticate(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 	if m.spec.Authenticate != nil {
@@ -203,6 +211,110 @@ func (m *recipeModule) Harvest(ctx context.Context, c *recon.Client, t module.To
 }
 
 var fieldRe = regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
+
+// hostSegment matches a value safe to splice into the authority of a base URL:
+// a hostname label or account id. Anything else (a URL delimiter, whitespace)
+// could relocate the request.
+var hostSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ErrUnsafeBase is returned when a templated base URL would resolve somewhere
+// the module did not intend.
+var ErrUnsafeBase = errors.New("recipe: refused unsafe base URL")
+
+// errNoBase means the base template needs an endpoint the caller never supplied.
+// Distinct from ErrUnsafeBase: an unknown instance URL is a gap in what we were
+// told, not a hostile value, and says nothing about the credential's validity.
+var errNoBase = errors.New("recipe: no endpoint supplied")
+
+// authorityEnd returns the index in a base template where the authority
+// (host[:port]) ends — the first "/" after the scheme, or the end of string.
+func authorityEnd(s string) int {
+	start := 0
+	if i := strings.Index(s, "://"); i >= 0 {
+		start = i + 3
+	}
+	if j := strings.Index(s[start:], "/"); j >= 0 {
+		return start + j
+	}
+	return len(s)
+}
+
+// renderBase substitutes fields into the base URL, refusing any substitution
+// that could move the request to another host.
+//
+// Field values reach here from scanned data (a .env, a config file, a harvested
+// secret), so they are untrusted. Three positions, three rules:
+//
+//   - A field at position 0 IS the base URL ("{endpoint}", "{endpoint}/api/v2").
+//     It must be an absolute http(s) URL with a host and no userinfo. Any host is
+//     allowed — triaging a self-hosted instance at an arbitrary domain is the
+//     tool's job — but the structure is checked.
+//   - A field inside the authority ("https://{shop}.myshopify.com") is a
+//     hostname label. A "/", "#", "?" or "@" there re-points the whole request,
+//     so only hostSegment values are accepted.
+//   - A field in the path cannot change the host; it is only checked for control
+//     characters and whitespace (values like a Telegram token carry ":").
+func renderBase(base string, f module.Fields) (string, error) {
+	authEnd := authorityEnd(base)
+	var bad error
+	out := fieldRe.ReplaceAllStringFunc(base, func(sub string) string {
+		loc := strings.Index(base, sub)
+		key := strings.Trim(sub, "{}")
+		v := f[key]
+		switch {
+		case loc == 0: // the field is the base URL itself
+			if v == "" {
+				if bad == nil {
+					bad = fmt.Errorf("%w: field %q", errNoBase, key)
+				}
+				return ""
+			}
+			if err := validateBaseURL(v); err != nil && bad == nil {
+				bad = fmt.Errorf("%w: field %q: %v", ErrUnsafeBase, key, err)
+			}
+			return strings.TrimRight(v, "/")
+		case loc < authEnd: // the field is a hostname label
+			if !hostSegment.MatchString(v) && bad == nil {
+				bad = fmt.Errorf("%w: field %q = %q is not a hostname label", ErrUnsafeBase, key, v)
+			}
+			return v
+		default: // path position: cannot move the host
+			if strings.ContainsAny(v, " \t\r\n") && bad == nil {
+				bad = fmt.Errorf("%w: field %q contains whitespace", ErrUnsafeBase, key)
+			}
+			return v
+		}
+	})
+	if bad != nil {
+		return "", bad
+	}
+	if out == "" {
+		return "", nil // no base; the caller may supply one from the token exchange
+	}
+	if err := validateBaseURL(out); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrUnsafeBase, err)
+	}
+	return out, nil
+}
+
+// validateBaseURL enforces the structural rules on a fully-rendered base: an
+// absolute http(s) URL, with a host, carrying no embedded credentials.
+func validateBaseURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("unparseable URL %q: %w", s, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme %q is not http(s)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("no host in %q", s)
+	}
+	if u.User != nil {
+		return fmt.Errorf("URL carries userinfo")
+	}
+	return nil
+}
 
 func tmpl(s string, f module.Fields) string {
 	return fieldRe.ReplaceAllStringFunc(s, func(sub string) string {
@@ -261,8 +373,24 @@ func (m *recipeModule) applyAuth(req *http.Request, f module.Fields, t module.To
 }
 
 func (m *recipeModule) Recon(ctx context.Context, c *recon.Client, t module.Token, f module.Fields) ([]module.Finding, error) {
-	base := tmpl(m.spec.Base, f)
+	base, err := renderBase(m.spec.Base, f)
+	switch {
+	case errors.Is(err, errNoBase):
+		// Not a verdict on the credential: we simply don't know where its
+		// instance lives. Surface that instead of letting an empty recon be
+		// summarized as DEAD.
+		return []module.Finding{{Key: "needs_endpoint",
+			Value: "instance URL unknown — re-run with --endpoint <host> to characterize this credential",
+			Flag:  module.FlagInfo}}, nil
+	case err != nil:
+		// Refuse before a packet leaves the host: an unsafe base means the
+		// credential would be sent somewhere the module did not intend.
+		return nil, err
+	}
 	if t.InstanceURL != "" && base == "" {
+		if err := validateBaseURL(t.InstanceURL); err != nil {
+			return nil, fmt.Errorf("%w: instance URL: %v", ErrUnsafeBase, err)
+		}
 		base = t.InstanceURL
 	}
 	var findings []module.Finding

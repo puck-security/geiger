@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -245,5 +247,85 @@ func TestAnnotateContextExposureAndTimeline(t *testing.T) {
 	annotateContext(&res3, b, Options{Live: true, StartedAt: when})
 	if len(res3.Note.Findings) != 0 {
 		t.Errorf("invalid note must not get context findings: %+v", res3.Note.Findings)
+	}
+}
+
+// TestHTTPClientAppliesRedirectPolicy: the redirect policy only protects
+// credentials if the client geiger actually reconns with installs it. Without
+// this, recon.CheckRedirect can sit unused and every module keeps leaking custom
+// auth headers across a redirect.
+func TestHTTPClientAppliesRedirectPolicy(t *testing.T) {
+	c, err := httpClient(5*time.Second, "")
+	if err != nil {
+		t.Fatalf("httpClient: %v", err)
+	}
+	if c.CheckRedirect == nil {
+		t.Fatal("recon HTTP client has no CheckRedirect: credential headers would follow a cross-host redirect")
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://collector.attacker.tld/x", nil)
+	req.Header.Set("X-Vault-Token", "hvs.TKN")
+	via := []*http.Request{httptest.NewRequest(http.MethodGet, "https://vault.acme.internal/v1/auth", nil)}
+	if err := c.CheckRedirect(req, via); err != nil {
+		t.Fatalf("CheckRedirect: %v", err)
+	}
+	if got := req.Header.Get("X-Vault-Token"); got != "" {
+		t.Errorf("X-Vault-Token = %q after cross-host redirect, want stripped", got)
+	}
+}
+
+// stubMod is a minimal module carrying a declared endpoint policy.
+type stubMod struct {
+	module.Base
+	name string
+	pol  module.EndpointPolicy
+}
+
+func (m stubMod) Name() string                          { return m.name }
+func (m stubMod) EndpointPolicy() module.EndpointPolicy { return m.pol }
+func (stubMod) Recon(context.Context, *recon.Client, module.Token, module.Fields) ([]module.Finding, error) {
+	return nil, nil
+}
+func (stubMod) Summarize(t string, fs []module.Finding) module.Note {
+	return module.Note{Title: t, Findings: fs}
+}
+
+// TestUnverifiedDestinationWarns: for a self-hosted service geiger cannot tell a
+// legitimate internal host from one an attacker planted in the scanned file —
+// both are just "some domain". The host restriction that protects SaaS modules
+// is therefore unavailable here, so the destination must at least be called out
+// rather than silently dialed.
+func TestUnverifiedDestinationWarns(t *testing.T) {
+	mod := stubMod{name: "vault", pol: module.EndpointPolicy{SelfHosted: true}}
+	f := module.Fields{"token": "T", "endpoint": "https://collector.attacker.tld"}
+
+	got := unverifiedDestination(mod, f, "")
+	if got == nil {
+		t.Fatal("a data-derived endpoint on a self-hosted module must be flagged")
+	}
+	if got.Flag != module.FlagWarn {
+		t.Errorf("flag = %v, want FlagWarn", got.Flag)
+	}
+	if !strings.Contains(got.Value, "collector.attacker.tld") {
+		t.Errorf("the host must be named so an operator can spot it: %q", got.Value)
+	}
+}
+
+// TestUnverifiedDestinationSilentWhenOperatorNamedIt: the operator typed the
+// host, so there is nothing to warn about.
+func TestUnverifiedDestinationSilentWhenOperatorNamedIt(t *testing.T) {
+	mod := stubMod{name: "vault", pol: module.EndpointPolicy{SelfHosted: true}}
+	f := module.Fields{"token": "T", "endpoint": "https://vault.acme.internal"}
+	if got := unverifiedDestination(mod, f, "https://vault.acme.internal"); got != nil {
+		t.Errorf("an --endpoint the operator supplied must not warn: %+v", got)
+	}
+}
+
+// TestUnverifiedDestinationSilentForVendorPinnedHost: a SaaS module's host was
+// already checked against the vendor's domains, so it is verified.
+func TestUnverifiedDestinationSilentForVendorPinnedHost(t *testing.T) {
+	mod := stubMod{name: "zendesk", pol: module.EndpointPolicy{HostSuffixes: []string{"zendesk.com"}}}
+	f := module.Fields{"token": "T", "endpoint": "https://acme.zendesk.com"}
+	if got := unverifiedDestination(mod, f, ""); got != nil {
+		t.Errorf("a vendor-pinned host is verified: %+v", got)
 	}
 }

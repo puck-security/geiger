@@ -35,7 +35,7 @@ const secretStoreCap = 60 // total secrets pulled per store per run
 
 func registerInfisical() {
 	add("", r.HTTP{
-		ModuleName: "infisical", Base: "{endpoint}", Accept: "application/json", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "infisical", Endpoint: selfHosted, Base: "{endpoint}", Accept: "application/json", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			if f["client_id"] != "" { // Universal Auth machine identity
 				return sessionLogin(ctx, c, f["endpoint"]+"/api/v1/auth/universal-auth/login",
@@ -75,7 +75,7 @@ func registerInfisical() {
 
 func registerDelineaSecretServer() {
 	add("", r.HTTP{
-		ModuleName: "delinea_secret_server", Base: "{endpoint}", Accept: "application/json", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "delinea_secret_server", Endpoint: selfHosted, Base: "{endpoint}", Accept: "application/json", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return auth.Exchange(ctx, c, f["endpoint"]+"/oauth2/token",
 				url.Values{"grant_type": {"password"}, "username": {f["username"]}, "password": {f["password"]}}, nil)
@@ -148,6 +148,10 @@ func delineaHarvest(ctx context.Context, c *recon.Client, base, token string) []
 type akeyless struct{ module.Base }
 
 func (akeyless) Name() string { return "akeyless" }
+
+// EndpointPolicy: Akeyless runs as SaaS and as a self-hosted Gateway, so the
+// host cannot be pinned to a vendor domain.
+func (akeyless) EndpointPolicy() module.EndpointPolicy { return selfHosted }
 
 func (m akeyless) Authenticate(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 	body := jsonBody("access-id", f["access_id"], "access-key", f["access_key"], "access-type", "access_key")

@@ -27,6 +27,9 @@ type duoAdmin struct{ module.Base }
 
 func (duoAdmin) Name() string { return "duo" }
 
+// EndpointPolicy: Duo Admin API is SaaS-only, always api-<id>.duosecurity.com.
+func (duoAdmin) EndpointPolicy() module.EndpointPolicy { return saasOnly("duosecurity.com") }
+
 // duoSignedGET builds a Duo-signed GET request for path with the given params.
 func duoSignedGET(ctx context.Context, host, ikey, skey, path string, params url.Values) (*http.Request, error) {
 	date := time.Now().UTC().Format(time.RFC1123Z)

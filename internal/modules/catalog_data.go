@@ -27,7 +27,7 @@ func init() {
 
 func registerSnowflake() {
 	add("", r.HTTP{
-		ModuleName: "snowflake", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "snowflake", Endpoint: saasOnly("snowflakecomputing.com", "snowflakecomputing.cn"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Headers: map[string]string{"X-Snowflake-Authorization-Token-Type": "PROGRAMMATIC_ACCESS_TOKEN"},
 		// SELECT CURRENT_USER()/CURRENT_ROLE() is read-only by construction (a
 		// fixed query), so it's an opted-in read POST like STS/k8s rules-review.
@@ -62,7 +62,7 @@ func registerSnowflake() {
 
 func registerSalesforce() {
 	add("", r.HTTP{
-		ModuleName: "salesforce", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "salesforce", Endpoint: saasOnly("salesforce.com", "force.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami:    r.GET("/services/oauth2/userinfo").Field("user", "preferred_username").Field("email", "email").Field("org", "organization_id"),
 		Static:    []module.Finding{{Key: "reach", Value: "read/modify CRM objects the user can access (accounts, contacts, opportunities, cases) — customer PII; admin profiles reach setup & all data", Flag: fmFlag}},
 		Summarize: func([]module.Finding) string { return "Salesforce — CRM object access (customer PII)" },
@@ -81,7 +81,7 @@ func registerSalesforce() {
 
 func registerSupabase() {
 	add("", r.HTTP{
-		ModuleName: "supabase", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "supabase", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Headers: map[string]string{"apikey": "{token}"},
 		// The admin users endpoint only answers to a service_role key, so a 200
 		// here both validates the key and confirms it bypasses RLS.
@@ -208,7 +208,7 @@ func plaidHost(env string) string {
 
 func registerPlaid() {
 	add("", r.HTTP{
-		ModuleName: "plaid", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.None},
+		ModuleName: "plaid", Endpoint: saasOnly("plaid.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.None},
 		// /institutions/get requires valid client_id+secret, so it validates the
 		// keys read-only without needing a linked-item access token.
 		Whoami: r.Call{Method: "POST", Path: "/institutions/get", ReadOnlyPOST: true,
