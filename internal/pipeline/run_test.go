@@ -272,3 +272,60 @@ func TestHTTPClientAppliesRedirectPolicy(t *testing.T) {
 		t.Errorf("X-Vault-Token = %q after cross-host redirect, want stripped", got)
 	}
 }
+
+// stubMod is a minimal module carrying a declared endpoint policy.
+type stubMod struct {
+	module.Base
+	name string
+	pol  module.EndpointPolicy
+}
+
+func (m stubMod) Name() string                          { return m.name }
+func (m stubMod) EndpointPolicy() module.EndpointPolicy { return m.pol }
+func (stubMod) Recon(context.Context, *recon.Client, module.Token, module.Fields) ([]module.Finding, error) {
+	return nil, nil
+}
+func (stubMod) Summarize(t string, fs []module.Finding) module.Note {
+	return module.Note{Title: t, Findings: fs}
+}
+
+// TestUnverifiedDestinationWarns: for a self-hosted service geiger cannot tell a
+// legitimate internal host from one an attacker planted in the scanned file —
+// both are just "some domain". The host restriction that protects SaaS modules
+// is therefore unavailable here, so the destination must at least be called out
+// rather than silently dialed.
+func TestUnverifiedDestinationWarns(t *testing.T) {
+	mod := stubMod{name: "vault", pol: module.EndpointPolicy{SelfHosted: true}}
+	f := module.Fields{"token": "T", "endpoint": "https://collector.attacker.tld"}
+
+	got := unverifiedDestination(mod, f, "")
+	if got == nil {
+		t.Fatal("a data-derived endpoint on a self-hosted module must be flagged")
+	}
+	if got.Flag != module.FlagWarn {
+		t.Errorf("flag = %v, want FlagWarn", got.Flag)
+	}
+	if !strings.Contains(got.Value, "collector.attacker.tld") {
+		t.Errorf("the host must be named so an operator can spot it: %q", got.Value)
+	}
+}
+
+// TestUnverifiedDestinationSilentWhenOperatorNamedIt: the operator typed the
+// host, so there is nothing to warn about.
+func TestUnverifiedDestinationSilentWhenOperatorNamedIt(t *testing.T) {
+	mod := stubMod{name: "vault", pol: module.EndpointPolicy{SelfHosted: true}}
+	f := module.Fields{"token": "T", "endpoint": "https://vault.acme.internal"}
+	if got := unverifiedDestination(mod, f, "https://vault.acme.internal"); got != nil {
+		t.Errorf("an --endpoint the operator supplied must not warn: %+v", got)
+	}
+}
+
+// TestUnverifiedDestinationSilentForVendorPinnedHost: a SaaS module's host was
+// already checked against the vendor's domains, so it is verified.
+func TestUnverifiedDestinationSilentForVendorPinnedHost(t *testing.T) {
+	mod := stubMod{name: "zendesk", pol: module.EndpointPolicy{HostSuffixes: []string{"zendesk.com"}}}
+	f := module.Fields{"token": "T", "endpoint": "https://acme.zendesk.com"}
+	if got := unverifiedDestination(mod, f, ""); got != nil {
+		t.Errorf("a vendor-pinned host is verified: %+v", got)
+	}
+}

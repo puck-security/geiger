@@ -146,6 +146,10 @@ type HTTP struct {
 	Auth       AuthSpec
 	Whoami     Call
 	Calls      []Call // additional inventory/count calls
+	// Endpoint declares where this module's credential may legitimately be sent.
+	// Required for any spec whose Base is templated on a URL-valued field; the
+	// catalog guard test fails without it. See module.EndpointPolicy.
+	Endpoint module.EndpointPolicy
 	// MultiScope marks an API where the whoami can 401 for a token that is still
 	// live against a different scope (e.g. Cloudflare's user-scoped
 	// /user/tokens/verify rejects an account/zone-scoped token). For these we keep
@@ -185,6 +189,9 @@ type recipeModule struct {
 }
 
 func (m *recipeModule) Name() string { return m.name }
+
+// EndpointPolicy exposes the spec's declared policy to the recognize-time guard.
+func (m *recipeModule) EndpointPolicy() module.EndpointPolicy { return m.spec.Endpoint }
 
 // Authenticate runs the optional token-exchange hook.
 func (m *recipeModule) Authenticate(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {

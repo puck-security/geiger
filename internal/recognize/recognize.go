@@ -8,6 +8,7 @@ package recognize
 import (
 	"github.com/puck-security/geiger/internal/module"
 	"github.com/puck-security/geiger/internal/parse"
+	"net/url"
 	"strings"
 )
 
@@ -46,27 +47,85 @@ func Recognize(b parse.Blob, endpoint string, reg *module.Registry) []Match {
 		matches = append(matches, f(b, endpoint, reg)...)
 	}
 	matches = dedupe(matches)
-	matches = injectEndpoint(matches, endpoint)
+	matches = enforceEndpointPolicy(matches, endpoint, reg)
 	matches = suppressOverridden(matches)
 	return suppressConsumedUnknowns(matches)
 }
 
-// injectEndpoint makes the --endpoint value available to every module templated
-// on {endpoint}, including those recognized by gitleaks (whose matches carry
-// only the token). A recognizer that already set "endpoint" wins.
-func injectEndpoint(in []Match, endpoint string) []Match {
-	if endpoint == "" {
-		return in
-	}
+// enforceEndpointPolicy is the single chokepoint for every URL a credential may
+// be sent to. It runs after all recognizers and before any module code, so it
+// covers hand-written modules and Authenticate hooks — not just recipe bases.
+//
+// Recognizers only ever RETURN matches; they never dial. So however a recognizer
+// derived its host (a co-located var, a regex over the raw blob, string
+// concatenation), the result passes through here. A new module cannot opt out.
+//
+// For each URL-valued field:
+//
+//   - The operator's --endpoint overwrites it. The flag is an explicit assertion;
+//     anything read out of the scanned blob is untrusted input that may have been
+//     planted, so the flag must not be silently outranked by the file.
+//   - The value must be a structurally valid http(s) URL.
+//   - It must satisfy the module's declared EndpointPolicy.
+//
+// On violation the FIELD is cleared, not the match. The credential still
+// surfaces — modules/catalog_needs_endpoint.go turns an endpoint-less
+// instance-scoped credential into a "set --endpoint and re-run" note — so a
+// planted URL degrades into a visible prompt rather than silently dropping a
+// live credential (or, worse, shipping it to the planted host).
+func enforceEndpointPolicy(in []Match, endpoint string, reg *module.Registry) []Match {
 	for i := range in {
 		if in[i].Fields == nil {
 			in[i].Fields = module.Fields{}
 		}
-		if in[i].Fields["endpoint"] == "" {
-			in[i].Fields["endpoint"] = endpoint
+		pol := policyFor(in[i].Module, reg)
+		for _, key := range module.URLValuedFields {
+			v := in[i].Fields[key]
+			// The flag applies to the module's primary endpoint field only; it
+			// says nothing about a secondary host a recognizer paired with it.
+			if endpoint != "" && key == "endpoint" {
+				v = endpoint
+			}
+			if v == "" {
+				continue
+			}
+			if !endpointPermitted(v, pol) {
+				delete(in[i].Fields, key)
+				continue
+			}
+			in[i].Fields[key] = v
 		}
 	}
 	return in
+}
+
+// endpointPermitted reports whether a URL is structurally sound AND allowed by
+// the module's policy.
+func endpointPermitted(raw string, pol module.EndpointPolicy) bool {
+	if err := module.ValidateEndpointURL(raw); err != nil {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return pol.HostAllowed(u.Host)
+}
+
+// policyFor returns the module's declared policy, or a permissive one when the
+// module declares none (structural validation still applies).
+func policyFor(name string, reg *module.Registry) module.EndpointPolicy {
+	if reg == nil {
+		return module.EndpointPolicy{SelfHosted: true}
+	}
+	m, ok := reg.ByName(name)
+	if !ok {
+		return module.EndpointPolicy{SelfHosted: true}
+	}
+	if es, ok := m.(module.EndpointScoped); ok {
+		return es.EndpointPolicy()
+	}
+	return module.EndpointPolicy{SelfHosted: true}
 }
 
 // dedupe collapses (module, secret) collisions, preferring the match with the

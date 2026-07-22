@@ -31,7 +31,7 @@ func init() {
 
 func registerSumoLogic() {
 	add("", r.HTTP{
-		ModuleName: "sumologic", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "access_id", PassField: "access_key"},
+		ModuleName: "sumologic", Endpoint: saasOnly("sumologic.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "access_id", PassField: "access_key"},
 		Whoami:    r.GET("/api/v1/users?limit=1").CountArrayFlag("data", "users (PII)", warnFlag),
 		Static:    []module.Finding{{Key: "reach", Value: "search all ingested logs (routinely contain secrets, tokens, and PII) and manage collectors/users", Flag: fmFlag}},
 		Summarize: func([]module.Finding) string { return "Sumo Logic — log search (secrets/PII) + collector admin" },
@@ -54,7 +54,7 @@ func registerSumoLogic() {
 
 func registerLacework() {
 	add("", r.HTTP{
-		ModuleName: "lacework", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "lacework", Endpoint: saasOnly("lacework.net"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			req, err := recon.NewRequest(ctx, http.MethodPost, f["endpoint"]+"/api/v2/access/tokens",
 				[]byte(`{"keyId":`+jsonQuote(f["key_id"])+`,"expiryTime":3600}`))
@@ -102,7 +102,7 @@ func registerLacework() {
 
 func registerWiz() {
 	add("", r.HTTP{
-		ModuleName: "wiz", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "wiz", Endpoint: saasOnly("wiz.io"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			au := f["auth_url"]
 			if au == "" {

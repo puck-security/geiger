@@ -52,6 +52,9 @@ type conjur struct{}
 
 func (conjur) Name() string { return "conjur" }
 
+// EndpointPolicy: Conjur (OSS and Enterprise) is deployed on customer infra.
+func (conjur) EndpointPolicy() module.EndpointPolicy { return selfHosted }
+
 // Authenticate exchanges the long-lived API key for a short-lived access token
 // (base64, ~8 min TTL) via the authn endpoint.
 func (conjur) Authenticate(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {

@@ -31,7 +31,7 @@ func zabbixRPC(method, params string) []byte {
 
 func registerZabbix() {
 	add("", r.HTTP{
-		ModuleName: "zabbix", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "zabbix", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return staticOr(f["token"], func() (module.Token, error) {
 				body := zabbixRPC("user.login", string(jsonBody("username", f["username"], "password", f["password"])))
@@ -65,7 +65,7 @@ func registerZabbix() {
 
 func registerSplunk() {
 	add("", r.HTTP{
-		ModuleName: "splunk", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed, RawAuth: true},
+		ModuleName: "splunk", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed, RawAuth: true},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			if f["token"] != "" { // a Splunk auth token (JWT) authenticates as Bearer
 				return module.Token{Bearer: "Bearer " + f["token"]}, nil
@@ -107,7 +107,7 @@ func registerSplunk() {
 
 func registerAuvik() {
 	add("", r.HTTP{
-		ModuleName: "auvik", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "username", PassField: "token"},
+		ModuleName: "auvik", Endpoint: saasOnly("auvik.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "username", PassField: "token"},
 		Whoami:    r.GET("/v1/inventory/device/info?page[first]=1").FlagField("devices", "data.0.id", warnFlag),
 		Static:    []module.Finding{{Key: "reach", Value: "read full network topology, device/interface inventory and configs (read-oriented API)", Flag: warnFlag}},
 		Summarize: func([]module.Finding) string { return "Auvik — network topology & device inventory" },
@@ -136,7 +136,7 @@ func registerAuvik() {
 
 func registerManageEngineOpManager() {
 	add("", r.HTTP{
-		ModuleName: "manageengine_opmanager", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.None},
+		ModuleName: "manageengine_opmanager", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.None},
 		Whoami: r.GET("/api/json/device/listDevices?apiKey={token}").CountArrayFlag("", "devices", warnFlag),
 		Static: []module.Finding{{Key: "reach", Value: "manage monitored devices and trigger IT-automation workflows that run scripts on managed devices — remote-action surface gated by role", Flag: fmFlag}},
 		Summarize: func([]module.Finding) string {
