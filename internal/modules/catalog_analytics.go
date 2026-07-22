@@ -42,7 +42,7 @@ func registerKlaviyo() {
 
 func registerBraze() {
 	add("", r.HTTP{
-		ModuleName: "braze", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "braze", Endpoint: saasOnly("braze.com", "braze.eu"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami:    r.GET("/campaigns/list").CountArrayFlag("campaigns", "campaigns", warnFlag),
 		Static:    []module.Finding{{Key: "reach", Value: "send push/email/SMS to all users and export user profiles (PII) via the export endpoints", Flag: fmFlag}},
 		Summarize: func([]module.Finding) string { return "Braze — message-send to all users + profile export (PII)" },

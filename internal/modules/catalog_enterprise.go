@@ -41,7 +41,7 @@ func init() {
 // ---- ServiceNow: instance-scoped, HTTP Basic service-account user:pass ----
 func registerServiceNow() {
 	add("", r.HTTP{
-		ModuleName: "servicenow", Base: "{endpoint}",
+		ModuleName: "servicenow", Endpoint: saasOnly("service-now.com", "servicenow.com"), Base: "{endpoint}",
 		Auth:   r.AuthSpec{Kind: r.Basic, UserField: "username", PassField: "password"},
 		Accept: "application/json",
 		Whoami: r.GET("/api/now/ui/user/current_user").
@@ -79,7 +79,7 @@ func serviceNowBase(inst string) string {
 // ---- SailPoint Identity Security Cloud: PAT client_credentials → bearer ----
 func registerSailPoint() {
 	add("", r.HTTP{
-		ModuleName: "sailpoint", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "sailpoint", Endpoint: saasOnly("identitynow.com", "sailpoint.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return auth.ClientCredentials(ctx, c, f["endpoint"]+"/oauth/token", f["client_id"], f["client_secret"], url.Values{})
 		},
@@ -114,7 +114,7 @@ func registerSailPoint() {
 // ---- Workday: ISU client_credentials → bearer; no clean whoami, probe workers ----
 func registerWorkday() {
 	add("", r.HTTP{
-		ModuleName: "workday", Base: "{host}/ccx/api/v1/{tenant}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "workday", Endpoint: saasOnly("workday.com", "myworkday.com"), Base: "{host}/ccx/api/v1/{tenant}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return auth.ClientCredentials(ctx, c, f["host"]+"/ccx/oauth2/"+f["tenant"]+"/token", f["client_id"], f["client_secret"], url.Values{})
 		},
@@ -222,7 +222,7 @@ func registerDoppler() {
 // so we flag them offline rather than exercising them.
 func registerOnePassword() {
 	add("", r.HTTP{
-		ModuleName: "onepassword_connect", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "onepassword_connect", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		// No identity route; /v1/vaults both validates the token and sizes reach.
 		Whoami: r.GET("/v1/vaults").CountArray("", "vaults"),
 		Static: []module.Finding{{Key: "reach", Value: "GET /v1/vaults/{v}/items/{i} returns plaintext item fields — reads every secret in every vault the Connect token is scoped to", Flag: fmFlag}},
@@ -270,7 +270,7 @@ func registerOnePasswordRecognizer() {
 // ---- PingOne: worker-app client_credentials → bearer, environment-scoped ----
 func registerPingOne() {
 	add("", r.HTTP{
-		ModuleName: "pingone", Base: "{api}/v1", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "pingone", Endpoint: saasOnly("pingone.com", "pingone.eu", "pingone.asia", "pingone.ca"), Base: "{api}/v1", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return auth.ClientCredentials(ctx, c, f["auth"]+"/"+f["env"]+"/as/token", f["client_id"], f["client_secret"], url.Values{})
 		},
@@ -315,7 +315,7 @@ func pingoneHosts(region string) (api, authHost string) {
 // ---- CyberArk Privilege Cloud / PVWA: logon → raw session token ----
 func registerCyberArkPVWA() {
 	add("", r.HTTP{
-		ModuleName: "cyberark_pvwa", Base: "{endpoint}/PasswordVault",
+		ModuleName: "cyberark_pvwa", Endpoint: selfHosted, Base: "{endpoint}/PasswordVault",
 		Auth: r.AuthSpec{Kind: r.PreAuthed, RawAuth: true, ValuePrefix: ""},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return cyberArkLogon(ctx, c, f["endpoint"], f["username"], f["password"])

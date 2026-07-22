@@ -103,7 +103,7 @@ func ninjaRegionHost(region string) string {
 
 func registerNinjaOne() {
 	add("", r.HTTP{
-		ModuleName: "ninjaone", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "ninjaone", Endpoint: saasOnly("ninjarmm.com", "ninjaone.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return auth.ClientCredentials(ctx, c, f["endpoint"]+"/ws/oauth/token",
 				f["client_id"], f["client_secret"], url.Values{"scope": {"monitoring management control"}})
@@ -151,7 +151,7 @@ func registerAtera() {
 
 func registerKandji() {
 	add("", r.HTTP{
-		ModuleName: "kandji", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "kandji", Endpoint: saasOnly("kandji.io"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami:    r.GET("/api/v1/devices?limit=1").Field("device", "0.device_name"),
 		Static:    []module.Finding{{Key: "reach", Value: "POST /api/v1/devices/{id}/action/erase wipes a device and lock returns the macOS unlock PIN — high-impact MDM control", Flag: fmFlag}},
 		Summarize: func([]module.Finding) string { return "Kandji MDM — device inventory + remote lock/erase" },
@@ -183,7 +183,7 @@ func registerKandji() {
 
 func registerJamf() {
 	add("", r.HTTP{
-		ModuleName: "jamf", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "jamf", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			if f["client_id"] != "" {
 				return auth.ClientCredentials(ctx, c, f["endpoint"]+"/api/oauth/token", f["client_id"], f["client_secret"], nil)
@@ -283,7 +283,7 @@ func registerAutomox() {
 
 func registerTanium() {
 	add("", r.HTTP{
-		ModuleName: "tanium", Base: "{endpoint}/api/v2", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "session"},
+		ModuleName: "tanium", Endpoint: selfHosted, Base: "{endpoint}/api/v2", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "session"},
 		Whoami:    r.GET("/session/current").Field("user", "data.name"),
 		Calls:     []r.Call{r.GET("/computer_groups").CountArrayFlag("data", "computer groups (targetable scope)", warnFlag)},
 		Static:    []module.Finding{{Key: "reach", Value: "deploy packages and run actions across endpoints (questions + actions) — remote execution at scale", Flag: fmFlag}},
@@ -304,7 +304,7 @@ func registerTanium() {
 
 func registerAnsibleAWX() {
 	add("", r.HTTP{
-		ModuleName: "ansible_awx", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "ansible_awx", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami: r.GET("/api/v2/me/").Field("user", "results.0.username"),
 		Calls: []r.Call{
 			r.GET("/api/v2/inventories/?page_size=1").CountFlag("count", "inventories", warnFlag),
@@ -328,7 +328,7 @@ func registerAnsibleAWX() {
 
 func registerPuppet() {
 	add("", r.HTTP{
-		ModuleName: "puppet_enterprise", Base: "{endpoint}",
+		ModuleName: "puppet_enterprise", Endpoint: selfHosted, Base: "{endpoint}",
 		Auth: r.AuthSpec{Kind: r.PreAuthed, HeaderName: "X-Authentication"},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return staticOr(f["token"], func() (module.Token, error) {
@@ -367,7 +367,7 @@ func registerPuppet() {
 
 func registerSaltStack() {
 	add("", r.HTTP{
-		ModuleName: "saltstack", Base: "{endpoint}",
+		ModuleName: "saltstack", Endpoint: selfHosted, Base: "{endpoint}",
 		Auth: r.AuthSpec{Kind: r.PreAuthed, HeaderName: "X-Auth-Token"},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			eauth := f["eauth"]
@@ -401,7 +401,7 @@ func registerSaltStack() {
 
 func registerFleet() {
 	add("", r.HTTP{
-		ModuleName: "fleet", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "fleet", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return staticOr(f["token"], func() (module.Token, error) {
 				return sessionLogin(ctx, c, f["endpoint"]+"/api/v1/fleet/login",

@@ -332,7 +332,7 @@ func csvExportContents(raw string) (string, []exportItem) {
 
 func registerBitwardenAPI() {
 	add("", r.HTTP{
-		ModuleName: "bitwarden", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "bitwarden", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			// Bitwarden's identity endpoint wants the api scope plus device fields.
 			extra := url.Values{

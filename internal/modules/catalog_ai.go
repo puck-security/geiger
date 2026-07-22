@@ -67,7 +67,7 @@ func registerGemini() {
 
 func registerAzureOpenAI() {
 	add("", r.HTTP{
-		ModuleName: "azure_openai", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "api-key"},
+		ModuleName: "azure_openai", Endpoint: saasOnly("openai.azure.com", "cognitiveservices.azure.com", "openai.azure.us"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "api-key"},
 		Whoami:    r.GET("/openai/deployments?api-version=2023-05-15").CountArrayFlag("data", "deployments", infoFlag),
 		Static:    []module.Finding{{Key: "reach", Value: "call models on the Azure OpenAI resource (billed usage) and read its deployments", Flag: warnFlag}},
 		Summarize: func([]module.Finding) string { return "Azure OpenAI — resource model access (billed usage)" },

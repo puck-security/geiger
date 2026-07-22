@@ -554,6 +554,13 @@ identity/whoami call first, then a couple of count calls to size reach.
   headers, and errors.
 - **Untrusted-input hardening.** Refuses cloud-metadata targets (SSRF), sanitizes
   hostile API responses, strips file-referencing DSN options
+- **Endpoint provenance.** A host read out of scanned data is untrusted: a planted
+  URL would otherwise aim a real credential at whoever planted it. Every module
+  declares where its credential may go, enforced centrally at recognition time —
+  a SaaS module is pinned to its vendor's domains, `--endpoint` outranks anything
+  in the file, and a violation degrades to "needs endpoint" instead of dialing.
+  Self-hosted services can legitimately live at any domain, so those are not
+  pinned; their destination is flagged in the note instead.
 
 **Principle: likely impact, not perfect impact.** 
 geiger is triage, *not* deep cloud-privesc graphing (use PMapper/CloudFox/ScoutSuite/etc for that).
@@ -575,6 +582,26 @@ add("digitalocean-pat", recipe.HTTP{
     Calls:  []recipe.Call{recipe.GET("/v2/droplets").CountFrom("meta.total", "droplets")},
 }.Module())
 ```
+
+**If your `Base` is templated on a host — `{endpoint}`, `{host}`, `{api}`,
+`{server}` — you must also declare an `Endpoint` policy.** That host comes from
+the file being scanned, which an attacker may have written, so geiger needs to
+know which hosts are legitimate for your service:
+
+```go
+    // SaaS-only: pin the vendor's domains (list every region and gov host).
+    ModuleName: "zendesk", Endpoint: saasOnly("zendesk.com"), Base: "{endpoint}",
+
+    // Deployable at any domain — including vendors shipping both SaaS and
+    // on-prem, where pinning would break real deployments.
+    ModuleName: "vault", Endpoint: selfHosted, Base: "{endpoint}",
+```
+
+Resolve the host with `resolveEndpoint` rather than reading a variable yourself:
+it puts the operator's `--endpoint` ahead of anything in the file. Don't pair a
+service's credential with another service's URL variable — bind each host
+variable to the module it names. `TestEveryEndpointSteeredModuleDeclaresAPolicy`
+fails if a module skips this.
 
 Add an `httptest`-backed test, then `go run ./tools/coverage` to refresh the
 coverage table above. Exotic signing (SigV4, RS256-JWT, Digest) implements the

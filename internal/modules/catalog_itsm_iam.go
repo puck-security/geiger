@@ -25,7 +25,7 @@ func init() {
 
 func registerJira() {
 	add("", r.HTTP{
-		ModuleName: "jira", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "email", PassField: "token"},
+		ModuleName: "jira", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "email", PassField: "token"},
 		Whoami: r.GET("/rest/api/3/myself").Field("account", "accountId").Field("user", "displayName").Field("email", "emailAddress"),
 		Calls: []r.Call{
 			r.GET("/rest/api/3/project/search").CountFlag("total", "projects", warnFlag),
@@ -57,7 +57,7 @@ func registerJira() {
 
 func registerConfluence() {
 	add("", r.HTTP{
-		ModuleName: "confluence", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "email", PassField: "token"},
+		ModuleName: "confluence", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Basic, UserField: "email", PassField: "token"},
 		Whoami: r.GET("/wiki/rest/api/user/current").Field("account", "accountId").Field("user", "displayName").Field("email", "email"),
 		Calls: []r.Call{
 			r.GET("/wiki/rest/api/space?limit=100").CountFrom("size", "spaces"),
@@ -86,7 +86,7 @@ func registerConfluence() {
 
 func registerIvanti() {
 	add("", r.HTTP{
-		ModuleName: "ivanti", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "rest_api_key="},
+		ModuleName: "ivanti", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "rest_api_key="},
 		Whoami:    r.GET("/api/odata/businessobject/employees?$top=1").FlagField("employees readable", "value.0.RecId", warnFlag),
 		Static:    []module.Finding{{Key: "reach", Value: "ITSM/CMDB CRUD — read incidents, configuration items, and employee PII; can run workflows", Flag: warnFlag}},
 		Summarize: func([]module.Finding) string { return "Ivanti ITSM — incident/CMDB access + employee PII" },
@@ -105,7 +105,7 @@ func registerIvanti() {
 
 func registerPingFederate() {
 	add("", r.HTTP{
-		ModuleName: "pingfederate", Base: "{endpoint}/pf-admin-api/v1",
+		ModuleName: "pingfederate", Endpoint: selfHosted, Base: "{endpoint}/pf-admin-api/v1",
 		Auth:    r.AuthSpec{Kind: r.Basic, UserField: "username", PassField: "password"},
 		Headers: map[string]string{"X-XSRF-Header": "PingFederate"},
 		Whoami:  r.GET("/version").Field("version", "version"),
@@ -133,7 +133,7 @@ func registerPingFederate() {
 
 func registerSnipeIT() {
 	add("", r.HTTP{
-		ModuleName: "snipeit", Base: "{endpoint}/api/v1", Accept: "application/json", Auth: r.AuthSpec{Kind: r.Bearer},
+		ModuleName: "snipeit", Endpoint: selfHosted, Base: "{endpoint}/api/v1", Accept: "application/json", Auth: r.AuthSpec{Kind: r.Bearer},
 		Whoami:    r.GET("/hardware?limit=1").CountFlag("total", "assets", warnFlag),
 		Calls:     []r.Call{r.GET("/users?limit=1").CountFlag("total", "users (PII)", warnFlag)},
 		Static:    []module.Finding{{Key: "reach", Value: "full asset/license/user CRUD; user records carry employee PII", Flag: warnFlag}},
@@ -173,7 +173,7 @@ func registerClickHouseCloud() {
 
 func registerClickHouseSelfHosted() {
 	add("", r.HTTP{
-		ModuleName: "clickhouse_selfhosted", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.None},
+		ModuleName: "clickhouse_selfhosted", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.None},
 		Headers:   map[string]string{"X-ClickHouse-User": "{username}", "X-ClickHouse-Key": "{password}"},
 		Whoami:    r.GET("/?query=SELECT%20currentUser()%20FORMAT%20JSON").Field("user", "data.0.currentUser()"),
 		Static:    []module.Finding{{Key: "reach", Value: "SQL over HTTP — read/modify data and manage users per the account's GRANTs", Flag: warnFlag}},

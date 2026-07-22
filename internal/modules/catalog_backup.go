@@ -30,7 +30,7 @@ func init() {
 
 func registerVeeam() {
 	add("", r.HTTP{
-		ModuleName: "veeam", Base: "{endpoint}", Accept: "application/json",
+		ModuleName: "veeam", Endpoint: selfHosted, Base: "{endpoint}", Accept: "application/json",
 		Headers: map[string]string{"x-api-version": "1.1-rev2"},
 		Auth:    r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
@@ -58,7 +58,7 @@ func registerVeeam() {
 
 func registerAcronis() {
 	add("", r.HTTP{
-		ModuleName: "acronis", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "acronis", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return auth.ClientCredentials(ctx, c, f["endpoint"]+"/api/2/idp/token", f["client_id"], f["client_secret"], nil)
 		},
@@ -85,7 +85,7 @@ func registerAcronis() {
 
 func registerCohesity() {
 	add("", r.HTTP{
-		ModuleName: "cohesity", Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
+		ModuleName: "cohesity", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			dom := f["domain"]
 			if dom == "" {
@@ -116,7 +116,7 @@ func registerCohesity() {
 
 func registerNetBackup() {
 	add("", r.HTTP{
-		ModuleName: "netbackup", Base: "{endpoint}", Accept: "application/vnd.netbackup+json;version=8.0",
+		ModuleName: "netbackup", Endpoint: selfHosted, Base: "{endpoint}", Accept: "application/vnd.netbackup+json;version=8.0",
 		Auth: r.AuthSpec{Kind: r.PreAuthed},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			return staticOr(f["token"], func() (module.Token, error) {
@@ -150,7 +150,7 @@ func registerNetBackup() {
 
 func registerCommvault() {
 	add("", r.HTTP{
-		ModuleName: "commvault", Base: "{endpoint}", Accept: "application/json",
+		ModuleName: "commvault", Endpoint: selfHosted, Base: "{endpoint}", Accept: "application/json",
 		Auth: r.AuthSpec{Kind: r.PreAuthed, HeaderName: "Authtoken", ValuePrefix: "QSDK "},
 		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
 			pw := base64.StdEncoding.EncodeToString([]byte(f["password"]))

@@ -404,7 +404,11 @@ func runOne(b parse.Blob, reg *module.Registry, opts Options, m recognize.Match)
 	// In dry-run, network modules return no findings (responses are synthetic),
 	// so don't render them as "invalid" — present the planned read-only calls.
 	if !opts.Live && len(planned) > 0 {
-		return Result{Note: dryRunNote(title, len(planned)), Planned: planned}
+		n := dryRunNote(title, len(planned))
+		if w := unverifiedDestination(mod, m.Fields, opts.Endpoint); w != nil {
+			n.Findings = append(n.Findings, *w)
+		}
+		return Result{Note: n, Planned: planned}
 	}
 	if err != nil {
 		return Result{
@@ -413,6 +417,9 @@ func runOne(b parse.Blob, reg *module.Registry, opts Options, m recognize.Match)
 		}
 	}
 	note := mod.Summarize(title, findings)
+	if w := unverifiedDestination(mod, m.Fields, opts.Endpoint); w != nil {
+		note.Findings = append(note.Findings, *w)
+	}
 	res = Result{Note: note, Planned: client.Planned()}
 
 	// Transitive harvest (extracts downstream secret values) — gated.
@@ -464,6 +471,41 @@ func httpClient(timeout time.Duration, proxy string) (*http.Client, error) {
 		tr.Proxy = http.ProxyURL(u)
 	}
 	return &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: recon.CheckRedirect}, nil
+}
+
+// unverifiedDestination returns a warning when a credential is about to be sent
+// to a host that came out of the scanned input and that nothing has vouched for.
+//
+// A SaaS module pins its vendor's domains, so recognize already proved the host
+// belongs to that vendor. A self-hosted service has no such anchor: a legitimate
+// internal Vault and an attacker's collector are both just "some domain", and
+// refusing either would break the triage geiger exists to do. What is left is to
+// say so plainly — naming the host so an operator reviewing a dry-run can see a
+// destination they did not expect before committing to --live.
+//
+// Returns nil when the operator named the host themselves, or when the module's
+// policy already verified it.
+func unverifiedDestination(mod module.Module, f module.Fields, flagEndpoint string) *module.Finding {
+	if flagEndpoint != "" {
+		return nil // the operator asserted this host
+	}
+	ep := f["endpoint"]
+	if ep == "" {
+		return nil
+	}
+	es, ok := mod.(module.EndpointScoped)
+	if ok && len(es.EndpointPolicy().HostSuffixes) > 0 {
+		return nil // host was checked against the vendor's own domains
+	}
+	host := ep
+	if u, err := url.Parse(ep); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	return &module.Finding{
+		Key:   "destination from input",
+		Value: host + " — self-hosted service, so this host came from the scanned file and is not vendor-verified; confirm it before --live",
+		Flag:  module.FlagWarn,
+	}
 }
 
 func dryRunNote(title string, n int) module.Note {
