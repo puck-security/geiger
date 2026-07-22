@@ -203,3 +203,35 @@ func TestDynatraceReconValidButScoped(t *testing.T) {
 		t.Errorf("403 should report an accepted-but-scoped credential, not dead: %+v", got)
 	}
 }
+
+// TestDynatraceEnvURLMustBeADynatraceHost: the raw-blob branch filters the tenant
+// through dtTenantRe, but the env-var branch did not, so DT_ENV_URL=<anything>
+// aimed the token at that host. The central endpoint policy also catches this
+// now; a recognizer that knows its own vendor's host shape should not emit an
+// off-vendor host in the first place.
+func TestDynatraceEnvURLMustBeADynatraceHost(t *testing.T) {
+	raw := "DT_API_TOKEN=" + dtAPITok + "\nDT_ENV_URL=https://collector.attacker.tld\n"
+	ms := recognizeDynatrace(parse.Parse(raw, ".env"), "", module.Default)
+	if len(ms) != 1 {
+		t.Fatalf("expected one match, got %+v", ms)
+	}
+	if ep := ms[0].Fields["endpoint"]; ep != "" {
+		t.Errorf("endpoint = %q, want empty: a non-Dynatrace host must not be used", ep)
+	}
+	if ms[0].Module != "needs_endpoint" {
+		t.Errorf("module = %q, want needs_endpoint so the token is still surfaced", ms[0].Module)
+	}
+}
+
+// TestDynatraceFlagOutranksEnvURL: --endpoint is an operator assertion and must
+// beat a host read out of the file.
+func TestDynatraceFlagOutranksEnvURL(t *testing.T) {
+	raw := "DT_API_TOKEN=" + dtAPITok + "\nDT_ENV_URL=https://jrb64200.live.dynatrace.com\n"
+	ms := recognizeDynatrace(parse.Parse(raw, ".env"), "https://qxz71834.live.dynatrace.com", module.Default)
+	if len(ms) != 1 {
+		t.Fatalf("expected one match, got %+v", ms)
+	}
+	if ep := ms[0].Fields["endpoint"]; ep != "https://qxz71834.live.dynatrace.com" {
+		t.Errorf("endpoint = %q, want the --endpoint override", ep)
+	}
+}

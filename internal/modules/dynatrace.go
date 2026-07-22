@@ -29,16 +29,22 @@ func recognizeDynatrace(b parse.Blob, endpoint string, _ *module.Registry) []rec
 		return nil
 	}
 
-	// Resolve the tenant, first source wins: the URL discovered next to the token,
-	// then an env var, then the --endpoint override. The reported tenant keeps its
-	// original host; the endpoint we call is normalized to the classic API host.
+	// Resolve the tenant. The operator's --endpoint comes first: it is an explicit
+	// assertion, while anything read out of the blob is untrusted input a planted
+	// line could control. Then the URL discovered next to the token, then an env
+	// var. The reported tenant keeps its original host; the endpoint we call is
+	// normalized to the classic API host.
+	//
+	// Every blob-derived host goes through dtTenantRe. A Dynatrace token only ever
+	// authenticates against a Dynatrace tenant, so a host outside those domains is
+	// never right — and using it as the endpoint would send the token there.
 	var tenant, apiURL string
-	if host := dtTenantRe.FindString(b.Raw); host != "" {
-		tenant, apiURL = host, "https://"+dynatraceAPIHost(host)
-	} else if env := firstVar(b.Vars, "DT_ENV_URL", "DYNATRACE_ENV_URL", "DYNATRACE_URL", "DT_TENANT"); env != "" {
-		tenant, apiURL = env, dynatraceAPIURL(env)
-	} else if endpoint != "" {
+	if endpoint != "" {
 		apiURL = dynatraceAPIURL(endpoint)
+	} else if host := dtTenantRe.FindString(b.Raw); host != "" {
+		tenant, apiURL = host, "https://"+dynatraceAPIHost(host)
+	} else if env := dtTenantRe.FindString(firstVar(b.Vars, "DT_ENV_URL", "DYNATRACE_ENV_URL", "DYNATRACE_URL", "DT_TENANT")); env != "" {
+		tenant, apiURL = env, "https://"+dynatraceAPIHost(env)
 	}
 
 	if apiURL == "" {
