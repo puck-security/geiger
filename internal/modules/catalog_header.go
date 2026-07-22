@@ -99,9 +99,50 @@ func init() {
 		Calls: []r.Call{r.GET("/services").CountArray("services", "services")},
 	}.Module())
 
-	add("dynatrace-api-token", r.HTTP{
-		ModuleName: "dynatrace", Endpoint: saasOnly("dynatrace.com", "dynatracelabs.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "Api-Token "},
-		Whoami: r.GET("/api/v1/time").Field("server-time", ""),
+	add("", r.HTTP{
+		ModuleName: "dynatrace", Endpoint: saasOnly("dynatrace.com", "dynatracelabs.com"), Base: "{endpoint}",
+		Auth:   r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "Api-Token "},
+		Accept: "application/json",
+		Whoami: r.Call{
+			Method: "POST", Path: "/api/v2/apiTokens/lookup", Body: `{"token":"{token}"}`, ReadOnlyPOST: true,
+			Fields: []r.Extract{
+				{Key: "name", Path: "name"},
+				{Key: "owner", Path: "owner"},
+				{Key: "personal access token", Path: "personalAccessToken"},
+				{Key: "expires", Path: "expirationDate"},
+				{Key: "last used", Path: "lastUsedDate"},
+				{Key: "last used IP", Path: "lastUsedIpAddress"},
+				{Key: "scopes", Path: "scopes", Flag: warnFlag},
+			},
+			Signals: []r.Signal{
+				{Path: "scopes", Regex: `(?i)\b(apiTokens\.write|settings\.write|WriteConfig|extensions\.write|PluginUpload|extensionConfigurations\.write|credentialVault\.write|ExternalSyntheticIntegration|syntheticExecutions\.write|CaptureRequestData|DataPrivacy)\b`,
+					Key: "privilege", Value: "high-impact scope — mint tokens / write tenant config / deploy extensions (RCE) / run synthetic JS in-network / capture request data (wiretap) / disable PII masking / inject credentials", Flag: fmFlag},
+				{Path: "scopes", Regex: `(?i)\b(logs\.read|LogExport|DTAQLAccess|DataExport|settings\.read|ReadConfig|apiTokens\.read|auditLogs\.read|RestRequestForwarding|InstallerDownload)\b`,
+					Key: "exposure", Value: "sensitive read / exfil — logs & session replay (PII, secrets), config & token enumeration, cross-environment data pull", Flag: warnFlag},
+				{Path: "scopes", Regex: `(?i)\b(\w+\.ingest|entities\.write|problems\.write|securityProblems\.write|oneAgents\.write|activeGateTokenManagement\.write|tenantTokenRotation\.write)\b`,
+					Key: "integrity", Value: "integrity/availability write — inject/forge telemetry (poison dashboards, log injection, mask attacks), corrupt topology, hide problems, or tamper the OneAgent fleet", Flag: warnFlag},
+			},
+		},
+		Summarize: func(fs []module.Finding) string {
+			var exposure, integrity bool
+			for _, f := range fs {
+				switch f.Key {
+				case "privilege":
+					return "Dynatrace token — config write / token minting / extension deploy (RCE)"
+				case "exposure":
+					exposure = true
+				case "integrity":
+					integrity = true
+				}
+			}
+			switch {
+			case exposure:
+				return "Dynatrace token — sensitive data read (logs/sessions/config)"
+			case integrity:
+				return "Dynatrace token — telemetry/config mutation (integrity & evasion)"
+			}
+			return "Dynatrace token — scoped observability access"
+		},
 	}.Module())
 
 	add("honeycomb", r.HTTP{
