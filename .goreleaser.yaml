@@ -20,32 +20,18 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
+    # 64-bit only, on the three platforms people actually run this from. The
+    # dropped targets (linux/386, linux/armv7, windows/386, freebsd/*) each sat
+    # at 2-3 downloads across all releases — indistinguishable from scanners —
+    # while accounting for five of the eleven builds. Add a goos/goarch back if
+    # someone asks for one.
     goos:
       - linux
       - darwin
       - windows
-      - freebsd
     goarch:
       - amd64
       - arm64
-      - "386"
-      - arm
-    goarm:
-      - "7"
-    ignore:
-      # Apple silicon/Intel only on macOS.
-      - goos: darwin
-        goarch: "386"
-      - goos: darwin
-        goarch: arm
-      # 32-bit ARM isn't a meaningful Windows/FreeBSD target here.
-      - goos: windows
-        goarch: arm
-      - goos: freebsd
-        goarch: arm
-      # modernc.org/libc (the sqlite backend) has no freebsd/386 port.
-      - goos: freebsd
-        goarch: "386"
 
 archives:
   - id: geiger

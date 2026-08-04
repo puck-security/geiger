@@ -26,6 +26,23 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          # setup-go's built-in cache keys on go.sum alone, so it collides with
+          # the checks jobs — they save first and this job restores a cache
+          # holding only native amd64 objects. Own the cache here instead.
+          cache: false
+      # Cross-compiling ~600 deps (modernc.org/libc especially) for every target
+      # from cold is the bulk of the release wall clock. The sha suffix means
+      # each release saves a fresh entry seeded from the previous one, so the
+      # cache tracks dep changes instead of going stale on a fixed key.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: goreleaser-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            goreleaser-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            goreleaser-${{ runner.os }}-
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
