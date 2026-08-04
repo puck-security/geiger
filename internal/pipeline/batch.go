@@ -7,8 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -31,7 +33,7 @@ type Source struct {
 // fuel, so we don't descend into it. onFile, if non-nil, is called with the
 // running count of accepted files after each is added, for progress reporting.
 func WalkDir(dir string, onFile func(scanned int)) ([]Source, error) {
-	var out []Source
+	var paths []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
@@ -41,52 +43,136 @@ func WalkDir(dir string, onFile func(scanned int)) ([]Source, error) {
 				// IDE dirs are noise, but the agentic config inside them is not:
 				// pull just the known MCP config before skipping the rest.
 				if ideConfigDir(d.Name()) {
-					addIDEConfigs(path, &out, onFile)
+					paths = append(paths, ideConfigPaths(path)...)
 				}
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		addFile(path, d.Name(), &out, onFile)
+		if !skipFile(d.Name()) {
+			paths = append(paths, path)
+		}
 		return nil
 	})
-	return out, err
+	return loadSources(paths, onFile), err
 }
 
-// addFile reads one regular file and appends a Source. Generated/lock/binary
-// noise is skipped, and a file over the size cap is skipped — UNLESS it's an
-// AI-IDE token store (state.vscdb), a known high-value target identified by its
-// SQLite header without slurping the whole multi-MB binary.
-func addFile(path, name string, out *[]Source, onFile func(int)) {
-	if skipFile(name) {
-		return
+// loadConcurrency is the worker count for reading and parsing files. The work is
+// a syscall wait per file plus a CPU-bound parse, so a pool sized to the
+// machine (rather than 1) overlaps the two instead of serializing them.
+func loadConcurrency(n int) int {
+	if n <= 1 {
+		return 1
 	}
-	if isIDEStore(name) {
-		hdr, err := readHead(path, 64)
-		if err != nil || !strings.HasPrefix(hdr, "SQLite format 3") {
+	c := runtime.NumCPU()
+	if c > maxLoadWorkers {
+		c = maxLoadWorkers
+	}
+	if c < 2 {
+		c = 2
+	}
+	if c > n {
+		c = n
+	}
+	return c
+}
+
+const maxLoadWorkers = 16
+
+// loadSources reads and parses every candidate path through a worker pool.
+//
+// Results keep walk order: each worker writes its own slot and the slice is
+// compacted afterwards. That ordering is load-bearing, not cosmetic — the batch
+// dedupes a secret to its FIRST sighting, so a scheduling-dependent order would
+// make which file is reported as the primary location (and which land under
+// "also exposed in") vary between runs of the same scan.
+//
+// onFile, if non-nil, is called with the running count of loaded files. It is
+// invoked from worker goroutines but serialized, so a caller may write progress
+// output from it. The count is a completion tally, so it no longer implies
+// anything about which file is being read.
+func loadSources(paths []string, onFile func(int)) []Source {
+	if len(paths) == 0 {
+		return nil
+	}
+	slots := make([]*Source, len(paths))
+	var (
+		mu     sync.Mutex
+		loaded int
+	)
+	tick := func() {
+		if onFile == nil {
 			return
 		}
-		appendSource(out, path, hdr, fileModTime(path), onFile)
-		return
+		mu.Lock()
+		defer mu.Unlock()
+		loaded++
+		onFile(loaded)
+	}
+	load := func(i int) {
+		if s := loadFile(paths[i]); s != nil {
+			slots[i] = s
+			tick()
+		}
+	}
+	if conc := loadConcurrency(len(paths)); conc <= 1 {
+		for i := range paths {
+			load(i)
+		}
+	} else {
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		for range conc {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					load(i)
+				}
+			}()
+		}
+		for i := range paths {
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
+	}
+	out := make([]Source, 0, len(paths))
+	for _, s := range slots {
+		if s != nil {
+			out = append(out, *s)
+		}
+	}
+	return out
+}
+
+// loadFile reads and parses one regular file, or returns nil if it should not
+// become a Source. A file over the size cap is skipped — UNLESS it's an AI-IDE
+// token store (state.vscdb), a known high-value target identified by its SQLite
+// header without slurping the whole multi-MB binary.
+func loadFile(path string) *Source {
+	if isIDEStore(filepath.Base(path)) {
+		hdr, err := readHead(path, 64)
+		if err != nil || !strings.HasPrefix(hdr, "SQLite format 3") {
+			return nil
+		}
+		return newSource(path, hdr, fileModTime(path))
 	}
 	fi, err := os.Stat(path)
 	if err != nil || fi.Size() > maxFileSize {
-		return
+		return nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil
 	}
-	appendSource(out, path, string(data), fi.ModTime(), onFile)
+	return newSource(path, string(data), fi.ModTime())
 }
 
-func appendSource(out *[]Source, path, raw string, mod time.Time, onFile func(int)) {
+func newSource(path, raw string, mod time.Time) *Source {
 	b := parse.Parse(raw, path)
 	b.ModTime = mod
-	*out = append(*out, Source{Label: path, Blob: b})
-	if onFile != nil {
-		onFile(len(*out))
-	}
+	return &Source{Label: path, Blob: b}
 }
 
 func fileModTime(path string) time.Time {
@@ -100,31 +186,33 @@ func isIDEStore(name string) bool { return strings.HasSuffix(strings.ToLower(nam
 
 func ideConfigDir(name string) bool { return name == ".vscode" || name == ".idea" }
 
-// addIDEConfigs shallow-scans a skipped IDE dir for the MCP config it may hold
+// ideConfigPaths shallow-scans a skipped IDE dir for the MCP config it may hold
 // (mcp.json by name, or any .json that declares an "mcpServers" map), so a repo
 // scan still surfaces project-level agent credentials without descending into
 // the rest of the editor noise.
-func addIDEConfigs(dir string, out *[]Source, onFile func(int)) {
+func ideConfigPaths(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		return nil
 	}
+	var out []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".json") {
+		if !strings.HasSuffix(strings.ToLower(name), ".json") || skipFile(name) {
 			continue
 		}
 		if strings.EqualFold(name, "mcp.json") {
-			addFile(filepath.Join(dir, name), name, out, onFile)
+			out = append(out, filepath.Join(dir, name))
 			continue
 		}
 		if hd, err := readHead(filepath.Join(dir, name), 8192); err == nil && strings.Contains(hd, "\"mcpServers\"") {
-			addFile(filepath.Join(dir, name), name, out, onFile)
+			out = append(out, filepath.Join(dir, name))
 		}
 	}
+	return out
 }
 
 // readHead returns up to n bytes from the start of a file.

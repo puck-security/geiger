@@ -31,19 +31,33 @@ var envStageSuffixes = []string{
 // trying each name exactly first, then the same name under a known
 // environment/stage prefix or suffix.
 func firstVar(vars map[string]string, names ...string) string {
+	// Most scanned files hold no variables at all (a log, a README, a source
+	// file), and every module calls this on every file — so the empty case is by
+	// far the hottest and must not build a single key.
+	if len(vars) == 0 {
+		return ""
+	}
 	for _, n := range names {
 		if v := vars[n]; v != "" {
 			return v
 		}
 	}
+	// The decorated lookups need a "<prefix><name>" / "<name><suffix>" key, and
+	// building those with + allocates one string per combination — 23 per name,
+	// per module, per file, which profiled as the largest single CPU cost of a
+	// large offline scan. Reuse one buffer: the compiler elides the allocation
+	// for a map lookup keyed by string(buf).
+	var buf []byte
 	for _, n := range names {
 		for _, p := range envStagePrefixes {
-			if v := vars[p+n]; v != "" {
+			buf = append(append(buf[:0], p...), n...)
+			if v := vars[string(buf)]; v != "" {
 				return v
 			}
 		}
 		for _, s := range envStageSuffixes {
-			if v := vars[n+s]; v != "" {
+			buf = append(append(buf[:0], n...), s...)
+			if v := vars[string(buf)]; v != "" {
 				return v
 			}
 		}
