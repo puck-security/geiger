@@ -47,6 +47,8 @@ func Tier(name string) string {
 		return wrap(yellow, name)
 	case "DEAD":
 		return wrap(dim, name)
+	case "UNKNOWN":
+		return wrap(dim, name)
 	case "INFO":
 		return wrap(dim, name)
 	default: // LOW

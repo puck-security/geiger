@@ -25,13 +25,14 @@ const (
 	TierMedium   Tier = "MEDIUM"
 	TierLow      Tier = "LOW"
 	TierInfo     Tier = "INFO"
+	TierUnknown  Tier = "UNKNOWN"
 	TierDead     Tier = "DEAD"
 )
 
 // tierRank orders tiers by severity for threshold filtering (higher = worse;
 // DEAD is the floor).
 var tierRank = map[Tier]int{
-	TierCritical: 5, TierHigh: 4, TierMedium: 3, TierLow: 2, TierInfo: 1, TierDead: 0,
+	TierCritical: 6, TierHigh: 5, TierMedium: 4, TierLow: 3, TierInfo: 2, TierUnknown: 1, TierDead: 0,
 }
 
 // Rank returns a tier's severity rank (higher = more severe).
@@ -52,6 +53,8 @@ func ParseTier(s string) (Tier, bool) {
 		return TierInfo, true
 	case "dead":
 		return TierDead, true
+	case "unknown":
+		return TierUnknown, true
 	}
 	return "", false
 }
@@ -168,6 +171,13 @@ func TierFor(n module.Note, ctx Context) Tier {
 	s := BlastRadius(n, ctx)
 	ctxHit := ctx.Matches(n)
 	fm := hasForceMultiplier(n)
+	// Attempted but undetermined: the credential was neither disproved nor shown
+	// to reach anything, so report that rather than deriving a severity from
+	// descriptive findings (an engine name, a username) that demonstrate nothing.
+	// A crown-jewel context hit or a named capability still outranks it.
+	if n.Undetermined && !fm && !ctxHit {
+		return TierUnknown
+	}
 	switch {
 	case s >= 120 || (ctxHit && s >= 60):
 		return TierCritical
