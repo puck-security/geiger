@@ -17,12 +17,14 @@
 <img src="assets/geiger-demo.svg" width="660"
   alt="geiger triaging an AWS key — HIGH: prod account with secrets-manager access">
 
-Your secret scanner found the key — it won't tell you if it's still live or what it
-unlocks. `geiger` does: pipe any credential-bearing text at it and it recognizes the
-credentials inside, runs **read-only** recon with each, and ranks what they actually
+Your secret scanner found a key but it won't tell you if it's still live or what it
+unlocks. 
+
+`geiger` does: pipe any credential-bearing text at it and it recognizes the
+credentials inside, runs read-only recon with each, and ranks what they actually
 reach by blast radius.
 
-Dual-use triage: an incident responder's *"how bad is this?"* and a pentester's
+Triage: an incident responder's *"how bad is this?"* and a pentester's
 *"what does this key reach?"*. Read-only by construction, dry-run by default.
 
 ---
@@ -171,27 +173,36 @@ geiger --browser --json             # IOCs (extension id, hosts) for a SIEM
 
 ## Where geiger fits
 
-geiger is not a scanner — it starts where they stop. Detection finds the secret;
-geiger triages it. Point gitleaks or TruffleHog at the haystack, or nuclei at
-internet-exposed endpoints, then pipe the report in (`--from-gitleaks` /
-`--from-trufflehog` / `--from-nuclei -`) to learn which hits actually reach prod.
+geiger layers on top of the scanners you already run: detection finds the secret,
+geiger characterizes it. Pipe in a report (`--from-gitleaks` / `--from-trufflehog`
+/ `--from-nuclei -`), or point it at a directory — which is how IR usually uses it.
 
-| | gitleaks | TruffleHog | GitGuardian | **geiger** |
-|---|:---:|:---:|:---:|:---:|
-| Find secrets in code / git / files | ✅ | ✅ | ✅ | ▶ consumes their report |
-| Verify the secret is live | — | ✅ | ✅ | ✅ |
-| Characterize blast radius (identity, scope, reach) | — | partial¹ | partial² | ✅ ~163 types, scored |
-| Drain secret-managers + recursively triage downstream | — | — | — | ✅ |
-| DB / cluster / on-disk store recon (read-only) | — | — | — | ✅ |
-| Ranked for IR ("how bad, in what order") | — | — | partial | ✅ |
-| Local, no SaaS / account | ✅ | ✅ | — (SaaS) | ✅ |
+| | gitleaks | TruffleHog | GitGuardian | Kingfisher | **geiger** |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Find secrets in code / git / files | ✅ | ✅ | ✅ | ✅ | walks a tree; consumes their reports |
+| Verify the secret is live | — | ✅ | ✅ | ✅ | ✅ |
+| Characterize blast radius (identity, scope, reach) | — | partial | partial | ✅ | ✅ ~170+ types|
+| Triage any credential you hand it, type auto-detected | — | — | — | partial | ✅ |
+| Drain secret-managers + recursively triage downstream | — | — | — | — | ✅ |
+| DB / cluster / on-disk store recon (read-only) | — | — | — | partial | ✅ |
+| Ranked for IR ("how bad, in what order") | — | — | partial | ✅ | ✅ |
+| Local, no SaaS / account | ✅ | ✅ | — (SaaS) | ✅ | ✅ |
 
-¹ TruffleHog's `analyze` enumerates permissions for ~a dozen providers — the closest
-peer; geiger generalizes that to ~166 credential types with blast-radius scoring and
-downstream harvest. ² GitGuardian assigns validity/severity inside its platform.
 
-Detection is their job and they're good at it — geiger doesn't replace them, it
-answers the question they leave open: *now that you found it, how bad is it?*
+## Performance
+
+Offline triage runs locally in seconds. A live run is dominated by provider
+round-trip, so it scales with `--concurrency` and rate limits, not corpus size.
+
+| | measured |
+|---|---|
+| Dry-run, 20k files / 148MB | ~2.9s warm, ~8s cold |
+| Dry-run, a few files | 20–30ms |
+| Calls per credential | identity + small inventory fan-out (AWS key: 4) |
+| `--min-footprint` | 1 call |
+
+`--intrusive` is slower due to DB handshakes, secret-manager fan-out,
+recursive triage.
 
 ---
 
