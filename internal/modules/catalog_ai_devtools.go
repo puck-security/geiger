@@ -154,9 +154,15 @@ func claudeCodeOAuthSpec(base string) r.HTTP {
 		Base:       base,
 		Auth:       r.AuthSpec{Kind: r.Bearer},
 		Headers:    map[string]string{"anthropic-beta": "oauth-2025-04-20"},
+		// Candidate profile paths: only the ones the response actually carries are
+		// emitted, so listing a few covers the shape without guessing at one.
 		Whoami: r.GET("/api/oauth/profile").
 			Field("account", "account.email_address").
-			Field("organization", "organization.name"),
+			Field("account", "account.email").
+			Field("name", "account.full_name").
+			Field("organization", "organization.name").
+			Field("org type", "organization.organization_type").
+			Field("plan", "organization.billing_type"),
 		// Identity alone only proves the token authenticates. What it REACHES is
 		// the model surface it can drive, so size that too.
 		Calls: []r.Call{
@@ -164,6 +170,7 @@ func claudeCodeOAuthSpec(base string) r.HTTP {
 		},
 		Static: []module.Finding{
 			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},
+			{Key: "scope", Value: "authenticates model requests only — not claude.ai connectors or Remote Control sessions", Flag: infoFlag},
 			{Key: "reach", Value: "drives Claude Code as the logged-in user (agent runs within its tool permissions) billed to that account; a refresh token mints new access tokens", Flag: fmFlag},
 		},
 		Summarize: func([]module.Finding) string {
