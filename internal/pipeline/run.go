@@ -176,8 +176,13 @@ func (bt *Batch) RunConcurrent(srcs []Source, emit func(Result), progress func(d
 		}
 	}
 	if conc <= 1 {
-		for _, s := range srcs {
-			finish(bt.Run(s.Blob))
+		// Serial triage, but recognition — which is essentially all of the work on
+		// the offline path — is a pure function of the blob, so it can run ahead in
+		// parallel. Dedupe and module execution still happen one source at a time in
+		// input order, so results stay byte-identical to a fully serial run.
+		pre := prefetchMatches(srcs, bt.reg, bt.opts.Endpoint)
+		for i, s := range srcs {
+			finish(triageBlob(s.Blob, pre[i], bt.reg, bt.opts, bt.st, 0))
 		}
 		return all
 	}
@@ -288,8 +293,45 @@ func Run(b parse.Blob, reg *module.Registry, opts Options) []Result {
 	return runBlob(b, reg, opts, newHarvestState(), 0)
 }
 
+// prefetchMatches recognizes every source through a worker pool and returns the
+// matches per source, indexed alongside srcs. recognize.Recognize touches no
+// shared mutable state (the registry is read-only once modules have registered,
+// and the gitleaks detector guards its own), so this is a pure fan-out.
+func prefetchMatches(srcs []Source, reg *module.Registry, endpoint string) [][]recognize.Match {
+	out := make([][]recognize.Match, len(srcs))
+	conc := loadConcurrency(len(srcs))
+	if conc <= 1 {
+		for i, s := range srcs {
+			out[i] = recognize.Recognize(s.Blob, endpoint, reg)
+		}
+		return out
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range conc {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				out[i] = recognize.Recognize(srcs[i].Blob, endpoint, reg)
+			}
+		}()
+	}
+	for i := range srcs {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	return out
+}
+
 func runBlob(b parse.Blob, reg *module.Registry, opts Options, st *harvestState, depth int) []Result {
-	matches := recognize.Recognize(b, opts.Endpoint, reg)
+	return triageBlob(b, recognize.Recognize(b, opts.Endpoint, reg), reg, opts, st, depth)
+}
+
+// triageBlob runs the post-recognition half of the pipeline: dedupe each match
+// against the batch, execute its module, and recurse into anything harvested.
+func triageBlob(b parse.Blob, matches []recognize.Match, reg *module.Registry, opts Options, st *harvestState, depth int) []Result {
 	var results []Result
 	for _, m := range matches {
 		if opts.Select != nil && !opts.Select(m.Module) {
