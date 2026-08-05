@@ -12,6 +12,10 @@ import (
 	"github.com/puck-security/geiger/internal/recon"
 )
 
+// expiredMark tags the "expires" finding when the token is past its exp claim.
+// Summarize keys off it to mark the whole note dead.
+const expiredMark = "(EXPIRED)"
+
 // genericJWT decodes a JWT entirely offline: no network call is made or needed.
 // It surfaces issuer/subject/audience/expiry/scope and hints at the provider
 // the issuer maps to.
@@ -42,11 +46,13 @@ func (genericJWT) Recon(_ context.Context, _ *recon.Client, _ module.Token, f mo
 		out = append(out, module.Finding{Key: "scopes/roles", Value: scope, Flag: module.FlagInfo})
 	}
 	if exp, ok := claimTime(payload["exp"]); ok {
-		flag := module.FlagInfo
+		// The warn belongs on the token that still works. Expiry used to carry it,
+		// which scored an unusable token 14 points ABOVE an identical live one.
+		flag := module.FlagWarn
 		val := exp.UTC().Format("2006-01-02 15:04Z")
 		if time.Now().After(exp) {
-			val += "  (EXPIRED)"
-			flag = module.FlagWarn
+			val += "  " + expiredMark
+			flag = module.FlagInfo
 		} else {
 			val += "  (live)"
 		}
@@ -66,7 +72,13 @@ func (genericJWT) Summarize(title string, fs []module.Finding) module.Note {
 	}
 	n.Summary = "decoded offline — no network call made; map issuer to its provider for live recon"
 	for _, f := range fs {
-		if f.Key == "expires" && strings.Contains(f.Value, "EXPIRED") {
+		if f.Key == "expires" && strings.Contains(f.Value, expiredMark) {
+			// A past exp means the token cannot authenticate, and unlike most
+			// credentials that is provable offline without a live call — so it is a
+			// dead credential, not something to rotate. The claims still ride along
+			// in --json (the text renderer prints only the reason for a dead note).
+			n.Invalid = true
+			n.Reason = "expired " + strings.TrimSpace(strings.TrimSuffix(f.Value, expiredMark))
 			n.Summary = "expired JWT"
 		}
 	}
