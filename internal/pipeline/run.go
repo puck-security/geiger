@@ -342,6 +342,9 @@ func triageBlob(b parse.Blob, matches []recognize.Match, reg *module.Registry, o
 		}
 		res := runOne(b, reg, opts, m)
 		res.secret = m.Secret
+		// Set centrally rather than in runOne, which returns early on several
+		// paths — every note carries its provenance, including the invalid ones.
+		res.Note.Module, res.Note.File, res.Note.Line = m.Module, b.File, m.Line
 		annotateContext(&res, b, opts)
 		results = append(results, res)
 
