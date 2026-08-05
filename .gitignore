@@ -37,4 +37,9 @@ go.work.sum
 Thumbs.db
 .direnv/
 .claude/
+.agents/
+.beads/
+.codex/
 docs/superpowers/
+AGENTS.md
+CLAUDE.md
