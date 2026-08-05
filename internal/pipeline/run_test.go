@@ -242,11 +242,16 @@ func TestAnnotateContextExposureAndTimeline(t *testing.T) {
 		}
 	}
 
-	// dead credential → no context findings at all (not rendered anyway).
+	// dead credential → the exposure survives, because where a credential leaked
+	// is a fact about the pipeline that leaked it, not about this token still
+	// working. Nothing else: no timeline, no validated-live stamp.
 	res3 := Result{Note: module.Note{Title: "t", Invalid: true}}
 	annotateContext(&res3, b, Options{Live: true, StartedAt: when})
-	if len(res3.Note.Findings) != 0 {
-		t.Errorf("invalid note must not get context findings: %+v", res3.Note.Findings)
+	if len(res3.Note.Findings) != 1 {
+		t.Fatalf("dead note should carry exactly the exposure: %+v", res3.Note.Findings)
+	}
+	if res3.Note.Findings[0].Key != module.ExposureKey {
+		t.Errorf("dead note finding = %q, want %q", res3.Note.Findings[0].Key, module.ExposureKey)
 	}
 }
 

@@ -262,12 +262,20 @@ func plural(noun string, n int) string {
 // the responder leads with WHERE the credential was exposed (and what that
 // means) and WHEN. No-op for dead notes (their findings aren't rendered anyway).
 func annotateContext(res *Result, b parse.Blob, opts Options) {
-	if res.Note.Invalid {
-		return
-	}
 	var lead []module.Finding
 	if class, note, flag := classifyExposure(b.File); class != "" {
-		lead = append(lead, module.Finding{Key: "exposure", Value: note, Flag: flag})
+		lead = append(lead, module.Finding{Key: module.ExposureKey, Value: note, Flag: flag})
+	}
+	// A dead credential still carries one useful fact: where it leaked. That a
+	// token reached a log or a shell history says something about the pipeline
+	// that put it there, and the next token through it may well be live. Keep
+	// only the exposure — the rest of a dead note's detail is noise, and the
+	// score is zero either way.
+	if res.Note.Invalid {
+		if len(lead) > 0 {
+			res.Note.Findings = append(lead[:1:1], res.Note.Findings...)
+		}
+		return
 	}
 	if !b.ModTime.IsZero() {
 		lead = append(lead, module.Finding{Key: "source modified", Value: b.ModTime.Format("2006-01-02 (Mon)"), Flag: module.FlagInfo})
