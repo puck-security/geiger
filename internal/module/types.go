@@ -163,6 +163,11 @@ type Finding struct {
 	Detail []string
 }
 
+// ExposureKey is the finding key recording WHERE a credential was exposed.
+// Named so the renderer can single it out on a dead note, whose other detail is
+// suppressed.
+const ExposureKey = "exposure"
+
 // Note is a module's summary for one credential.
 type Note struct {
 	Title    string    // e.g. "GitHub PAT ghp_…JV3Q (from .env: GITHUB_TOKEN)"

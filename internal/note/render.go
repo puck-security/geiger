@@ -63,6 +63,15 @@ func text(n module.Note, verbose bool) string {
 	b.WriteString("\n")
 	if n.Invalid {
 		fmt.Fprintf(&b, "  invalid : %s\n", sanitize(orDash(n.Reason, "credential not live")))
+		// A dead credential's own detail is noise, but WHERE it leaked is not: a
+		// token in a log or a shell history indicts the pipeline that put it
+		// there regardless of whether this one still works.
+		for _, f := range n.Findings {
+			if f.Key == module.ExposureKey {
+				fmt.Fprintf(&b, "  exposure : %s\n", sanitize(f.Value))
+				break
+			}
+		}
 		return b.String()
 	}
 	// align keys
