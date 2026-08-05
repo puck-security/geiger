@@ -90,13 +90,13 @@ func registerAnthropicEnv() {
 // header), so it must not be routed to the `anthropic` API module. Stored in
 // plaintext at ~/.claude/.credentials.json on Linux (claudeAiOauth.accessToken).
 func registerClaudeCodeOAuth() {
-	add("", staticModule{name: "claude_code_oauth",
-		summary: "Claude Code / Claude subscription OAuth token — acts as the signed-in user",
-		findings: []module.Finding{
-			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},
-			{Key: "reach", Value: "drives Claude Code as the logged-in user (agent runs within its tool permissions) billed to that account; a refresh token mints new access tokens", Flag: fmFlag},
-			{Key: "validation", Value: "recognized by shape; not exercised (OAuth Bearer + anthropic-beta header, distinct from the x-api-key API)", Flag: cantFlag},
-		}})
+	// Exercised against the OAuth-side identity endpoint, NOT the x-api-key API
+	// and NOT a model request: `claude setup-token` tokens "can only make model
+	// requests", and a model request would bill the account and land in its usage
+	// — geiger stays read-only. /api/oauth/profile answers without spending
+	// anything, and each outcome is informative: 200 live, 401 dead, 403 live but
+	// without the user:profile scope (the recipe driver reads 403 as authenticated).
+	add("", claudeCodeOAuthSpec(anthropicOAuthBase).Module())
 	recognize.RegisterRecognizer(func(b parse.Blob, _ string, _ *module.Registry) []recognize.Match {
 		var out []recognize.Match
 		seen := map[string]bool{}
@@ -142,4 +142,27 @@ func recognizeGitHubCopilot(b parse.Blob, _ string, _ *module.Registry) []recogn
 			Secret: tok, Label: "github copilot [" + host + "]"})
 	}
 	return out
+}
+
+// anthropicOAuthBase is the OAuth-side API host, separate from the x-api-key
+// API. A variable so tests can point the same recipe at a stub server.
+var anthropicOAuthBase = "https://api.anthropic.com"
+
+func claudeCodeOAuthSpec(base string) r.HTTP {
+	return r.HTTP{
+		ModuleName: "claude_code_oauth",
+		Base:       base,
+		Auth:       r.AuthSpec{Kind: r.Bearer},
+		Headers:    map[string]string{"anthropic-beta": "oauth-2025-04-20"},
+		Whoami: r.GET("/api/oauth/profile").
+			Field("account", "account.email_address").
+			Field("organization", "organization.name"),
+		Static: []module.Finding{
+			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},
+			{Key: "reach", Value: "drives Claude Code as the logged-in user (agent runs within its tool permissions) billed to that account; a refresh token mints new access tokens", Flag: fmFlag},
+		},
+		Summarize: func([]module.Finding) string {
+			return "Claude Code / Claude subscription OAuth token — acts as the signed-in user"
+		},
+	}
 }
