@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -17,6 +18,9 @@ import (
 //
 // classes are stable labels used both for the per-finding note and to group the
 // "also exposed in" rollup. Match order matters (first hit wins).
+// gitHistoryRe matches the "<path>@<short sha>" label GitHistorySources builds.
+var gitHistoryRe = regexp.MustCompile(`@[0-9a-f]{7,40}$`)
+
 func classifyExposure(path string) (class, note string, flag module.FlagLevel) {
 	p := strings.ToLower(filepath.ToSlash(path))
 	base := strings.ToLower(filepath.Base(path))
@@ -62,6 +66,13 @@ func classifyExposure(path string) (class, note string, flag module.FlagLevel) {
 	case base == ".bash_history", base == ".zsh_history", base == ".history",
 		base == "fish_history", base == ".python_history", base == ".psql_history":
 		return "shell history file", "shell history — typed on the command line (and visible to anything reading the history file)", module.FlagWarn
+
+	// "<path>@<short sha>" is a blob read out of history: the value may be gone
+	// from the working tree but anyone with the repo can still recover it.
+	case gitHistoryRe.MatchString(path):
+		return "git history",
+			"in git history — committed at some point and recoverable from the repo even if deleted from the tree",
+			module.FlagWarn
 
 	case strings.Contains(p, "/.git/"):
 		return "git object", "git internals — committed to the repository and recoverable from history", module.FlagInfo

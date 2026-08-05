@@ -34,12 +34,12 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, verbose, stream, quiet, noReverse, useMetadata, browser, allExts bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                           string
-	userAgent, minSeverity, output                                                                                                           string
-	timeout                                                                                                                                  time.Duration
-	concurrency, minSevRank                                                                                                                  int
-	args                                                                                                                                     []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, gitHistory, verbose, stream, quiet, noReverse, useMetadata, browser, allExts bool
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                                       string
+	userAgent, minSeverity, output                                                                                                                       string
+	timeout                                                                                                                                              time.Duration
+	concurrency, minSevRank                                                                                                                              int
+	args                                                                                                                                                 []string
 }
 
 func main() {
@@ -59,6 +59,7 @@ func main() {
 	flag.StringVar(&c.fromNuclei, "from-nuclei", "", "ingest nuclei JSONL (-j) output and triage each extracted value; '-' reads stdin")
 	flag.StringVar(&c.fromKingfisher, "from-kingfisher", "", "ingest a Kingfisher JSON/JSONL report and triage each finding; '-' reads stdin")
 	flag.StringVar(&c.contextTerms, "context", "", "comma-separated crown-jewel terms (account ids, prod hosts, critical repos) that raise a credential's tier when matched")
+	flag.BoolVar(&c.gitHistory, "git-history", false, "also scan blobs in a repository's git history (catches credentials deleted from the working tree)")
 	flag.BoolVar(&c.correlate, "ssh-correlate", false, "for SSH keys, read local hints (~/.ssh/config, known_hosts, shell history) to list candidate target hosts")
 	flag.BoolVar(&c.trace, "trace", false, "print the raw request and response of each call (secrets masked); implies showing all calls")
 	flag.StringVar(&c.colorMode, "color", "auto", "colorize output: auto|always|never")
@@ -808,6 +809,21 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 				}
 				scanned += len(srcs)
 				all = append(all, srcs...)
+				// History is opt-in: it is unbounded, and reading it would change
+				// the cost of pointing geiger at a repo.
+				if c.gitHistory {
+					hbase := scanned
+					hist, err := pipeline.GitHistorySources(path, func(n int) {
+						if (hbase+n)%64 == 0 {
+							st.update("reading git history of %s — %d blobs", path, n)
+						}
+					})
+					if err != nil {
+						return nil, err
+					}
+					scanned += len(hist)
+					all = append(all, hist...)
+				}
 			case pipeline.LooksLikeGitleaks(path):
 				srcs, err := pipeline.FromGitleaks(path)
 				if err != nil {
