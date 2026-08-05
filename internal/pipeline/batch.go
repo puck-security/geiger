@@ -95,25 +95,24 @@ func loadSources(paths []string, onFile func(int)) []Source {
 	if len(paths) == 0 {
 		return nil
 	}
-	slots := make([]*Source, len(paths))
+	slots := make([][]Source, len(paths))
 	var (
 		mu     sync.Mutex
 		loaded int
 	)
-	tick := func() {
-		if onFile == nil {
+	tick := func(n int) {
+		if onFile == nil || n == 0 {
 			return
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		loaded++
+		loaded += n
 		onFile(loaded)
 	}
 	load := func(i int) {
-		if s := loadFile(paths[i]); s != nil {
-			slots[i] = s
-			tick()
-		}
+		s := loadFile(paths[i])
+		slots[i] = s
+		tick(len(s))
 	}
 	if conc := loadConcurrency(len(paths)); conc <= 1 {
 		for i := range paths {
@@ -139,40 +138,61 @@ func loadSources(paths []string, onFile func(int)) []Source {
 	}
 	out := make([]Source, 0, len(paths))
 	for _, s := range slots {
-		if s != nil {
-			out = append(out, *s)
-		}
+		out = append(out, s...)
 	}
 	return out
 }
 
-// loadFile reads and parses one regular file, or returns nil if it should not
-// become a Source. A file over the size cap is skipped — UNLESS it's an AI-IDE
-// token store (state.vscdb), a known high-value target identified by its SQLite
-// header without slurping the whole multi-MB binary.
-func loadFile(path string) *Source {
+// loadFile reads and parses one regular file. It returns nil when the file
+// should not become a Source, and more than one Source when the file is an
+// archive — IR is routinely handed a tarball of a compromised host, so a
+// container is expanded in memory and each member triaged in its own right.
+// A file over the size cap is skipped — UNLESS it's an AI-IDE token store
+// (state.vscdb), a known high-value target identified by its SQLite header
+// without slurping the whole multi-MB binary.
+func loadFile(path string) []Source {
 	if isIDEStore(filepath.Base(path)) {
 		hdr, err := readHead(path, 64)
 		if err != nil || !strings.HasPrefix(hdr, "SQLite format 3") {
 			return nil
 		}
-		return newSource(path, hdr, fileModTime(path))
+		return []Source{newSource(path, hdr, fileModTime(path))}
 	}
 	fi, err := os.Stat(path)
-	if err != nil || fi.Size() > maxFileSize {
+	if err != nil {
+		return nil
+	}
+	// An archive is read past the per-file cap: the cap bounds one blob handed to
+	// the parsers, while an archive is a container whose members are each capped
+	// separately, under an overall byte and member budget.
+	if looksLikeArchive(path) {
+		if fi.Size() > maxArchiveBytes {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		srcs := archiveSources(path, data)
+		for i := range srcs {
+			srcs[i].Blob.ModTime = fi.ModTime()
+		}
+		return srcs
+	}
+	if fi.Size() > maxFileSize {
 		return nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	return newSource(path, string(data), fi.ModTime())
+	return []Source{newSource(path, string(data), fi.ModTime())}
 }
 
-func newSource(path, raw string, mod time.Time) *Source {
+func newSource(path, raw string, mod time.Time) Source {
 	b := parse.Parse(raw, path)
 	b.ModTime = mod
-	return &Source{Label: path, Blob: b}
+	return Source{Label: path, Blob: b}
 }
 
 func fileModTime(path string) time.Time {
@@ -277,7 +297,8 @@ func skipFile(name string) bool {
 		".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp", ".svg",
 		".woff", ".woff2", ".ttf", ".eot", ".otf",
 		".pyc", ".pyo", ".class", ".o", ".a", ".so", ".dylib", ".dll", ".wasm",
-		".zip", ".gz", ".tar", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".jar",
+		// Archive formats are NOT listed here — they are containers, and their
+		// members are triaged individually (see archive.go).
 		".pdf", ".mp3", ".mp4", ".mov", ".avi", ".webm":
 		return true
 	case ".map":

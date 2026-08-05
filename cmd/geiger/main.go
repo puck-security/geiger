@@ -787,6 +787,13 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 				}
 				all = append(all, srcs...)
 			default:
+				// A tarball/zip named directly is expanded like a directory would
+				// be — IR is usually handed the archive, not the extracted tree.
+				if srcs, ok := pipeline.SourcesFromArchive(path); ok {
+					scanned += len(srcs)
+					all = append(all, srcs...)
+					break
+				}
 				data, err := os.ReadFile(path)
 				if err != nil {
 					return nil, err
