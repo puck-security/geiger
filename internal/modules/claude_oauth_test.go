@@ -16,8 +16,10 @@ func oauthRun(t *testing.T, h http.HandlerFunc, tok string) ([]module.Finding, m
 	t.Helper()
 	var seen *http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clone := *r
-		seen = &clone
+		if seen == nil { // keep the FIRST request: the identity call
+			clone := *r
+			seen = &clone
+		}
 		h(w, r)
 	}))
 	defer srv.Close()
@@ -76,5 +78,35 @@ func TestClaudeOAuthScopedTokenIsNotDead(t *testing.T) {
 
 	if got := score.TierFor(n, score.Context{}); got == score.TierDead {
 		t.Errorf("a 403 proves the credential authenticated; got DEAD: %+v", n.Findings)
+	}
+}
+
+// Identity alone is existence, not reach: the token's model surface is what it
+// can actually drive, so recon must size that too.
+func TestClaudeOAuthCharacterizesModelReach(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/oauth/profile":
+			_, _ = w.Write([]byte(`{"account":{"email_address":"a@b.com"}}`))
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"claude-opus-5"},{"id":"claude-sonnet-5"},{"id":"claude-haiku-4-5"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := claudeCodeOAuthSpec(srv.URL).Module()
+	fs, err := m.Recon(context.Background(), recon.New(srv.Client(), true), module.Token{}, module.Fields{"token": "sk-ant-oat01-live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) < 2 || paths[1] != "/v1/models" {
+		t.Fatalf("model surface never probed, called %v", paths)
+	}
+	if got := indexByKey(fs)["models reachable"].Value; got != "3" {
+		t.Errorf("models reachable = %q, want 3: %+v", got, fs)
 	}
 }

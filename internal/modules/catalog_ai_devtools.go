@@ -157,6 +157,11 @@ func claudeCodeOAuthSpec(base string) r.HTTP {
 		Whoami: r.GET("/api/oauth/profile").
 			Field("account", "account.email_address").
 			Field("organization", "organization.name"),
+		// Identity alone only proves the token authenticates. What it REACHES is
+		// the model surface it can drive, so size that too.
+		Calls: []r.Call{
+			r.GET("/v1/models").CountArrayFlag("data", "models reachable", module.FlagWarn),
+		},
 		Static: []module.Finding{
 			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},
 			{Key: "reach", Value: "drives Claude Code as the logged-in user (agent runs within its tool permissions) billed to that account; a refresh token mints new access tokens", Flag: fmFlag},
