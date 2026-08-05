@@ -568,6 +568,17 @@ func (m *recipeModule) runCall(ctx context.Context, c *recon.Client, base string
 	// Drift-resilient supplement: scan the response for privilege/PII signals,
 	// and fall back to a generic identity/count when declared paths matched
 	// nothing (e.g. the API changed shape).
+	// Some APIs answer 2xx with a failure envelope in the body (Cloudflare's
+	// {"success":false,"errors":[…]}). If nothing the module declared could be
+	// extracted AND the body says it failed, the call failed — otherwise the
+	// generic scanner below counts the ERROR list as a detected collection, recon
+	// looks non-empty, and non-empty recon is what attaches a module's Static
+	// findings. That is how a rejected key came to report HIGH "full account
+	// access". Requiring the extraction to be empty keeps an API whose real data
+	// happens to be an error list working.
+	if len(out) == 0 && apiRejected(decoded) {
+		return nil, resp.Status, statusErr{http.StatusUnauthorized}
+	}
 	out = append(out, heuristicFindings(decoded, len(out) == 0)...)
 	return out, resp.Status, nil
 }
@@ -619,3 +630,36 @@ func (m *recipeModule) Summarize(title string, fs []module.Finding) module.Note 
 type statusErr struct{ code int }
 
 func (e statusErr) Error() string { return fmt.Sprintf("status %d", e.code) }
+
+// apiRejected reports whether a 2xx body is really a failure envelope. Only an
+// explicit negative status flag, or a populated error list, counts — an "errors"
+// key that is present but empty is what a SUCCESSFUL Cloudflare-style response
+// looks like, and must not be read as a rejection.
+func apiRejected(decoded any) bool {
+	obj, ok := decoded.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, k := range []string{"success", "ok"} {
+		if b, present := obj[k].(bool); present && !b {
+			return true
+		}
+	}
+	for _, k := range []string{"errors", "error"} {
+		switch v := obj[k].(type) {
+		case []any:
+			if len(v) > 0 {
+				return true
+			}
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return true
+			}
+		case map[string]any:
+			if len(v) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
