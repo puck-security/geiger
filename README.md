@@ -235,6 +235,7 @@ recursive triage.
 | `--from-gitleaks F` / `--from-trufflehog F` | triage each finding in a scanner report |
 | `--from-nuclei F` | triage each value extracted by a nuclei JSONL (`-j`) scan; `F` = `-` reads stdin (stream over a pipe) |
 | `--from-kingfisher F` | triage each finding in a Kingfisher JSON/JSONL report (not `--redact`ed — geiger needs the value); `F` = `-` reads stdin. Their finding fingerprint is carried through to `--json`/`--sarif` so their viewer dedupes against its own findings |
+| `--git-history` | also scan blobs in a repository's git history — catches credentials deleted from the working tree but still recoverable from the repo (needs `git` on PATH) |
 | `--ssh-correlate` | SSH: read local hints for candidate target hosts |
 | `--trace` | print the raw request + response of each call (secrets masked) |
 | `--user-agent UA` | User-Agent for recon calls (default `geiger/<version>`) |
