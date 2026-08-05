@@ -161,21 +161,90 @@ func parseKV(raw string, out map[string]string, lines map[string]int) {
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue
 		}
-		l = strings.TrimPrefix(l, "export ")
-		k, v, ok := strings.Cut(l, "=")
+		l = trimDeclKeywords(l)
+		k, v, ok := cutAssignment(l)
 		if !ok {
 			continue
 		}
 		k = strings.TrimSpace(k)
 		v = strings.TrimSpace(v)
+		// A source-file assignment ends in a statement terminator that is not part
+		// of the value (`const T = "abc";`). Strip it only when doing so exposes a
+		// properly quoted string, so a dotenv value that genuinely ends in a comma
+		// is left alone. Carrying the ";' through would send it on the wire and
+		// report a live credential as dead.
+		if t := strings.TrimRight(v, ";,"); len(t) >= 2 && (t[0] == '"' || t[0] == '\'') && t[len(t)-1] == t[0] {
+			v = t
+		}
 		v = strings.Trim(v, `"'`)
-		if k != "" {
+		if k != "" && plausibleVarName(k) {
 			out[k] = v
 			if lines != nil {
 				lines[k] = i + 1
 			}
 		}
 	}
+}
+
+// trimDeclKeywords strips the declaration keywords that precede a real
+// assignment, so `export const API_TOKEN = "…"` still yields the variable
+// API_TOKEN rather than the unusable name "export const API_TOKEN". A hardcoded
+// secret in source is exactly the leak geiger is looking for; only the keyword
+// is noise.
+func trimDeclKeywords(l string) string {
+	for _, kw := range []string{"export ", "const ", "let ", "var ", "public ", "static ", "final "} {
+		for strings.HasPrefix(l, kw) {
+			l = strings.TrimPrefix(l, kw)
+		}
+	}
+	return l
+}
+
+// cutAssignment splits a line at its first ASSIGNMENT '=', ignoring the '=' in
+// the comparison and arrow operators that pepper source code. Without this a
+// line like
+//
+//	slackBotToken: () => getEnv("SLACK_BOT_TOKEN"),
+//
+// splits inside "=>" and yields the variable "slackBotToken: ()" holding
+// '> getEnv("SLACK_BOT_TOKEN"),' — a credential-shaped value that is really a
+// fragment of code, and a false positive in a file that is doing the right thing
+// by reading its secrets from the environment.
+func cutAssignment(l string) (k, v string, ok bool) {
+	for i := 0; i < len(l); i++ {
+		if l[i] != '=' {
+			continue
+		}
+		// "=>" and "==" start at this '='; "!=", ">=", "<=" end at it.
+		if i+1 < len(l) && (l[i+1] == '>' || l[i+1] == '=') {
+			continue
+		}
+		if i > 0 && (l[i-1] == '!' || l[i-1] == '>' || l[i-1] == '<' || l[i-1] == '=') {
+			continue
+		}
+		return l[:i], l[i+1:], true
+	}
+	return "", "", false
+}
+
+// plausibleVarName reports whether a key could really name an environment
+// variable, a dotenv entry, or an INI key. Anything with a space, quote, or
+// bracket came out of misreading source code as key=value, and the "secret" it
+// carries is a code fragment.
+func plausibleVarName(k string) bool {
+	if len(k) > 128 {
+		return false
+	}
+	for _, r := range k {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_', r == '-', r == '.', r == '[', r == ']':
+			// [] appears in real config keys (arr[0], section[name]).
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func flattenJSON(prefix string, obj map[string]any, out map[string]string) {
