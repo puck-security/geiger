@@ -340,11 +340,19 @@ func triageBlob(b parse.Blob, matches []recognize.Match, reg *module.Registry, o
 		if !st.claim(m.Secret, b.File, depth) {
 			continue // already triaged this exact secret (cycle/cross-file dupe guard)
 		}
+		// A scanner report gives geiger one secret per blob, so the line recognize
+		// computed is the line within THAT blob — always 1 — while the useful
+		// number is where the secret sits in the real file. Ingesters record it
+		// against the secret value; prefer it, for the title and the location both.
+		if l := b.Lines[m.Secret]; l > 0 {
+			m.Line = l
+		}
 		res := runOne(b, reg, opts, m)
 		res.secret = m.Secret
 		// Set centrally rather than in runOne, which returns early on several
 		// paths — every note carries its provenance, including the invalid ones.
 		res.Note.Module, res.Note.File, res.Note.Line = m.Module, b.File, m.Line
+		res.Note.Fingerprint = b.Fingerprint
 		annotateContext(&res, b, opts)
 		results = append(results, res)
 

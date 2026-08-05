@@ -182,6 +182,11 @@ func resultProperties(n module.Note, tier score.Tier, ctx score.Context) map[str
 	if n.Summary != "" {
 		props["summary"] = sanitize(n.Summary)
 	}
+	// The upstream scanner's own id, so its viewer can line these findings up
+	// with the ones it produced itself.
+	if n.Fingerprint != "" {
+		props["fingerprint"] = sanitize(n.Fingerprint)
+	}
 	findings := make([]map[string]any, 0, len(n.Findings))
 	var capabilities []string
 	for _, f := range n.Findings {
