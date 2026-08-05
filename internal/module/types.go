@@ -184,6 +184,14 @@ type Note struct {
 	// Fingerprint is an upstream scanner's id for the finding this came from,
 	// passed through verbatim so their viewer can dedupe against their own.
 	Fingerprint string
+
+	// Undetermined marks a credential geiger tried to characterize and could
+	// not — the host was unreachable, the format has no module to exercise, a
+	// passphrase is missing. It is NOT dead (nothing disproved it) and it has no
+	// demonstrated reach, so scoring it from descriptive findings alone would
+	// invent a severity. Set it and the tier reads UNKNOWN, with Reason saying
+	// why.
+	Undetermined bool
 }
 
 // Module is the unit of credential coverage.

@@ -225,7 +225,7 @@ recursive triage.
 | `--timeout DUR` | per-credential recon timeout (default `15s`) |
 | `--concurrency N` | credentials reconned at once on `--live` (default `8`) |
 | `--context TERMS` | comma-separated crown-jewel terms; a match raises tier |
-| `--min-severity TIER` | only print findings at or above a tier (`critical`/`high`/`medium`/`low`/`info`/`dead`); `dead` is the floor, so `info` excludes dead and `high` keeps only critical+high |
+| `--min-severity TIER` | only print findings at or above a tier (`critical`/`high`/`medium`/`low`/`info`/`unknown`/`dead`); `dead` is the floor, so `info` excludes dead and unknown, and `high` keeps only critical+high |
 | `-o, --output FILE` | write results to FILE instead of stdout (`0600`, color off; status stays on stderr) |
 | `--json` | machine-readable output (NDJSON, one note per line) |
 | `--sarif` | SARIF 2.1.0 output for code-scanning and triage viewers; tier and score ride in `properties` (NDJSON stays canonical) |

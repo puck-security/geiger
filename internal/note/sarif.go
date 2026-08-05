@@ -94,7 +94,7 @@ func sarifLevel(t score.Tier) string {
 		return "error"
 	case score.TierMedium:
 		return "warning"
-	case score.TierLow, score.TierInfo:
+	case score.TierLow, score.TierInfo, score.TierUnknown:
 		return "note"
 	default: // dead
 		return "none"
@@ -175,6 +175,9 @@ func resultProperties(n module.Note, tier score.Tier, ctx score.Context) map[str
 	}
 	if n.Invalid {
 		props["invalid"] = true
+	}
+	if n.Undetermined {
+		props["undetermined"] = true
 	}
 	if n.Reason != "" {
 		props["reason"] = sanitize(n.Reason)

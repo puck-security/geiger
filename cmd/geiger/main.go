@@ -74,7 +74,7 @@ func main() {
 	flag.StringVar(&c.userAgent, "user-agent", "", "User-Agent for recon calls (default geiger/<version>)")
 	flag.DurationVar(&c.timeout, "timeout", 15*time.Second, "per-credential recon timeout (e.g. 5s, 30s)")
 	flag.IntVar(&c.concurrency, "concurrency", 8, "max credentials reconned at once on the --live path")
-	flag.StringVar(&c.minSeverity, "min-severity", "", "only print findings at or above this tier: critical|high|medium|low|info|dead")
+	flag.StringVar(&c.minSeverity, "min-severity", "", "only print findings at or above this tier: critical|high|medium|low|info|unknown|dead")
 	flag.StringVar(&c.output, "o", "", "write results to FILE instead of stdout (0600, color off; status stays on stderr)")
 	flag.StringVar(&c.output, "output", "", "alias for -o")
 	flag.Usage = usage
@@ -111,7 +111,7 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 	if c.minSeverity != "" {
 		t, ok := score.ParseTier(c.minSeverity)
 		if !ok {
-			fmt.Fprintf(stderr, "geiger: invalid --min-severity %q (want critical|high|medium|low|info|dead)\n", c.minSeverity)
+			fmt.Fprintf(stderr, "geiger: invalid --min-severity %q (want critical|high|medium|low|info|unknown|dead)\n", c.minSeverity)
 			return 2
 		}
 		c.minSevRank = score.Rank(t)
@@ -566,7 +566,7 @@ func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c c
 			}
 		}
 	}
-	for _, t := range []score.Tier{score.TierCritical, score.TierHigh, score.TierMedium, score.TierLow, score.TierInfo, score.TierDead} {
+	for _, t := range []score.Tier{score.TierCritical, score.TierHigh, score.TierMedium, score.TierLow, score.TierInfo, score.TierUnknown, score.TierDead} {
 		if counts[t] > 0 {
 			tiers = append(tiers, fmt.Sprintf("%s %d", color.Tier(string(t)), counts[t]))
 		}

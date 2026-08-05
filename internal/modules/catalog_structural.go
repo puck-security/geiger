@@ -103,7 +103,7 @@ func (dbConnString) Recon(ctx context.Context, c *recon.Client, _ module.Token, 
 		default:
 			// Network/reach failure says nothing about validity — not dead.
 			out = append(out, module.Finding{Key: "data access",
-				Value: "host unreachable: " + dbErr(err, f["dsn"], pw), Flag: module.FlagInfo})
+				Value: "host unreachable: " + dbErr(err, f["dsn"], pw), Flag: module.FlagCantCharacterize})
 		}
 	}
 	return out, nil
@@ -234,6 +234,15 @@ func (dbConnString) Summarize(title string, fs []module.Finding) module.Note {
 			n.Invalid = true
 			n.Reason = "authentication failed — credential rejected"
 			return n
+		}
+	}
+	// Reached nothing: the credential is neither proved nor disproved, and the
+	// engine/host/user lines describe the DSN rather than demonstrating access.
+	// Scoring those would invent a severity, so report it as undetermined.
+	for _, f := range fs {
+		if f.Key == "data access" && strings.Contains(f.Value, "host unreachable") {
+			n.Undetermined = true
+			n.Reason = "host unreachable — could not confirm whether this credential works"
 		}
 	}
 	for _, f := range fs {
