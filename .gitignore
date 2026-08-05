@@ -38,3 +38,6 @@ Thumbs.db
 .direnv/
 .claude/
 docs/superpowers/
+.beads/
+.agents/
+.codex/
