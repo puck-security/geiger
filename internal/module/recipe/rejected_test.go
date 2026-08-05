@@ -108,3 +108,39 @@ func TestErrorListAsRealDataStillWorks(t *testing.T) {
 		t.Errorf("declared field extracted nothing; error-list payload was misread as a rejection: %+v", fs)
 	}
 }
+
+// A credential the API ACCEPTED (2xx/403) but whose body we couldn't parse is
+// live — it must keep the module's Static description. Dropping it left a proven
+// token reading LOW with nothing describing it.
+func TestAuthenticatedButUnparsedKeepsStatic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"unexpected":"shape"}`))
+	}))
+	defer srv.Close()
+
+	m := HTTP{
+		ModuleName: "s", Base: srv.URL, Auth: AuthSpec{Kind: None},
+		Whoami: GET("/me").Field("account", "account.email"),
+		Static: []module.Finding{{Key: "type", Value: "described type", Flag: module.FlagInfo}},
+	}.Module()
+
+	fs, err := m.Recon(context.Background(), recon.New(srv.Client(), true), module.Token{}, module.Fields{"token": "live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotStatic, gotAuthed bool
+	for _, f := range fs {
+		if f.Key == "type" {
+			gotStatic = true
+		}
+		if f.Key == "authenticated" {
+			gotAuthed = true
+		}
+	}
+	if !gotAuthed {
+		t.Fatalf("expected the authenticated marker: %+v", fs)
+	}
+	if !gotStatic {
+		t.Errorf("a live credential lost its Static description: %+v", fs)
+	}
+}

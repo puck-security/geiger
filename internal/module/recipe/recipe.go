@@ -460,6 +460,13 @@ func (m *recipeModule) Recon(ctx context.Context, c *recon.Client, t module.Toke
 		findings = append(findings, module.Finding{Key: "authenticated",
 			Value: "credential accepted (HTTP 2xx/403) but identity not parsed — scoped key or the API shape changed",
 			Flag:  module.FlagWarn})
+		// The credential IS live here — 2xx/403 means the API accepted it, we just
+		// couldn't parse an identity out of the body. The Static findings describe
+		// the credential TYPE, so they hold regardless of what the response looked
+		// like, and dropping them left a proven-live token reading LOW with no
+		// description at all. (Distinct from a rejected credential, which never
+		// reaches this branch and must not inherit them.)
+		findings = append(findings, m.spec.Static...)
 	case whoami401:
 		// identity call rejected the token and nothing else accepted it →
 		// genuinely dead. Leave empty so Summarize marks it Invalid (DEAD).
