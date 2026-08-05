@@ -170,6 +170,12 @@ type Note struct {
 	Summary  string    // one-line takeaway, e.g. "org-admin bot token"
 	Invalid  bool      // recon proved the credential dead/expired
 	Reason   string    // why invalid, or why it could not be characterized
+
+	// Provenance, also carried in the Title for humans. Machine formats need it
+	// structurally: SARIF keys a rule off Module and a location off File/Line.
+	Module string // module that characterized the credential, e.g. "aws"
+	File   string // source the credential came from (path, URL, or "environment")
+	Line   int    // 1-based line within File, 0 when unknown
 }
 
 // Module is the unit of credential coverage.

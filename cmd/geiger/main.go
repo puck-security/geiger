@@ -34,12 +34,12 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, verbose, stream, quiet, noReverse, useMetadata, browser, allExts bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                                    string
-	userAgent, minSeverity, output                                                                                                    string
-	timeout                                                                                                                           time.Duration
-	concurrency, minSevRank                                                                                                           int
-	args                                                                                                                              []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, verbose, stream, quiet, noReverse, useMetadata, browser, allExts bool
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                                           string
+	userAgent, minSeverity, output                                                                                                           string
+	timeout                                                                                                                                  time.Duration
+	concurrency, minSevRank                                                                                                                  int
+	args                                                                                                                                     []string
 }
 
 func main() {
@@ -62,6 +62,7 @@ func main() {
 	flag.BoolVar(&c.trace, "trace", false, "print the raw request and response of each call (secrets masked); implies showing all calls")
 	flag.StringVar(&c.colorMode, "color", "auto", "colorize output: auto|always|never")
 	flag.BoolVar(&c.asJSON, "json", false, "machine-readable JSON output")
+	flag.BoolVar(&c.sarif, "sarif", false, "SARIF 2.1.0 output (interop export for code-scanning and triage viewers; NDJSON stays canonical)")
 	flag.BoolVar(&c.verbose, "v", false, "show the planned/executed recon calls")
 	flag.BoolVar(&c.stream, "stream", false, "stream results as they're found (discovery order) instead of buffering and sorting by impact")
 	flag.BoolVar(&c.noReverse, "no-reverse", false, "keep highest-impact findings first; don't reverse them to the bottom on an interactive terminal")
@@ -91,7 +92,7 @@ func main() {
 // run is the testable core: all human-facing status goes to stderr, all results
 // to stdout, so the two never interleave on a pipe. It returns the exit code.
 func run(stdout, stderr io.Writer, statusOn bool, c config) int {
-	color.Enabled = wantColor(c.colorMode, c.asJSON)
+	color.Enabled = wantColor(c.colorMode, c.machine())
 	ctx := score.Context{Terms: splitCSV(c.contextTerms)}
 	st := &status{w: stderr, on: statusOn}
 
@@ -181,11 +182,21 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 		}
 	}
 
+	// A SARIF log is one document with a shared rules table, so it cannot be
+	// emitted incrementally — say so rather than silently ignoring one of the two.
+	if c.stream && c.sarif {
+		fmt.Fprintln(stderr, "geiger: --sarif cannot be combined with --stream (SARIF is a single document); use --json to stream machine-readable results.")
+		return 2
+	}
 	if c.stream {
 		return runStream(out, stderr, sources, opts, ctx, c, extra)
 	}
 	return runSorted(out, stderr, st, sources, opts, ctx, c, extra)
 }
+
+// machine reports whether output is a machine format, which suppresses the human
+// summary, color, and the interactive lowest-first reordering.
+func (c config) machine() bool { return c.asJSON || c.sarif }
 
 // showResult reports whether a result clears the --min-severity threshold.
 func (c config) showResult(r pipeline.Result, ctx score.Context) bool {
@@ -209,12 +220,25 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		return 0
 	}
 	pipeline.SortBySeverity(results, ctx)
+	// SARIF is one document with a shared rules table, so it is emitted whole
+	// after sorting rather than a line at a time like NDJSON.
+	if c.sarif {
+		notes := make([]gmodule.Note, 0, len(results))
+		for _, r := range results {
+			if c.showResult(r, ctx) {
+				notes = append(notes, r.Note)
+			}
+		}
+		fmt.Fprintln(stdout, note.SARIF(notes, ctx, version))
+		printIntrusiveHint(stderr, results, c)
+		return 0
+	}
 	// On an interactive terminal, flip to lowest-impact-first so the CRITICAL/HIGH
 	// findings land at the bottom — right above the summary, where the eye ends a
 	// long scroll — instead of scrolling off the top. Piped/redirected/-o/JSON output
 	// stays highest-first so `| head`, pagers, saved reports, and NDJSON consumers are
 	// unaffected; --no-reverse forces the classic highest-first order everywhere.
-	if shouldReverse(c.noReverse, c.asJSON, c.output, isTTY(os.Stdout)) {
+	if shouldReverse(c.noReverse, c.machine(), c.output, isTTY(os.Stdout)) {
 		slices.Reverse(results)
 	}
 	printed := 0
@@ -225,7 +249,7 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		printResult(stdout, r, ctx, c, printed > 0)
 		printed++
 	}
-	if !c.asJSON && (len(results) > 1 || c.minSevRank > 0) {
+	if !c.machine() && (len(results) > 1 || c.minSevRank > 0) {
 		printSummary(stdout, results, ctx, c)
 	}
 	printIntrusiveHint(stderr, results, c)
@@ -260,7 +284,7 @@ func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipelin
 		}
 		return 0
 	}
-	if !c.asJSON && (len(all) > 1 || c.minSevRank > 0) {
+	if !c.machine() && (len(all) > 1 || c.minSevRank > 0) {
 		printSummary(stdout, all, ctx, c)
 	}
 	printIntrusiveHint(stderr, all, c)

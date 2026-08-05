@@ -228,6 +228,7 @@ recursive triage.
 | `--min-severity TIER` | only print findings at or above a tier (`critical`/`high`/`medium`/`low`/`info`/`dead`); `dead` is the floor, so `info` excludes dead and `high` keeps only critical+high |
 | `-o, --output FILE` | write results to FILE instead of stdout (`0600`, color off; status stays on stderr) |
 | `--json` | machine-readable output (NDJSON, one note per line) |
+| `--sarif` | SARIF 2.1.0 output for code-scanning and triage viewers; tier and score ride in `properties` (NDJSON stays canonical) |
 | `--stream` | print results as found (discovery order) instead of sorted by impact |
 | `--no-reverse` | keep highest-impact findings first; by default an interactive terminal reverses them to the bottom (above the summary) so the worst don't scroll off the top |
 | `--only TYPES` / `--skip TYPES` | scope by module name or category (`databases`,`cloud`,`secrets`,`ai`,`vcs`,`kubernetes`,`identity`,`backup`,`endpoint`) |
