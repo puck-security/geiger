@@ -176,6 +176,9 @@ type Note struct {
 	Module string // module that characterized the credential, e.g. "aws"
 	File   string // source the credential came from (path, URL, or "environment")
 	Line   int    // 1-based line within File, 0 when unknown
+	// Fingerprint is an upstream scanner's id for the finding this came from,
+	// passed through verbatim so their viewer can dedupe against their own.
+	Fingerprint string
 }
 
 // Module is the unit of credential coverage.

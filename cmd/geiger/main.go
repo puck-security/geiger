@@ -35,7 +35,7 @@ var version = "dev"
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
 	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, verbose, stream, quiet, noReverse, useMetadata, browser, allExts bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, contextTerms, colorMode, only, skip                                           string
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                           string
 	userAgent, minSeverity, output                                                                                                           string
 	timeout                                                                                                                                  time.Duration
 	concurrency, minSevRank                                                                                                                  int
@@ -57,6 +57,7 @@ func main() {
 	flag.StringVar(&c.fromGitleaks, "from-gitleaks", "", "ingest a gitleaks JSON report and triage each finding")
 	flag.StringVar(&c.fromTrufflehog, "from-trufflehog", "", "ingest a TruffleHog v3 JSON report and triage each finding")
 	flag.StringVar(&c.fromNuclei, "from-nuclei", "", "ingest nuclei JSONL (-j) output and triage each extracted value; '-' reads stdin")
+	flag.StringVar(&c.fromKingfisher, "from-kingfisher", "", "ingest a Kingfisher JSON/JSONL report and triage each finding; '-' reads stdin")
 	flag.StringVar(&c.contextTerms, "context", "", "comma-separated crown-jewel terms (account ids, prod hosts, critical repos) that raise a credential's tier when matched")
 	flag.BoolVar(&c.correlate, "ssh-correlate", false, "for SSH keys, read local hints (~/.ssh/config, known_hosts, shell history) to list candidate target hosts")
 	flag.BoolVar(&c.trace, "trace", false, "print the raw request and response of each call (secrets masked); implies showing all calls")
@@ -772,6 +773,9 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 	}
 	if c.fromNuclei != "" {
 		return pipeline.FromNuclei(c.fromNuclei)
+	}
+	if c.fromKingfisher != "" {
+		return pipeline.FromKingfisher(c.fromKingfisher)
 	}
 	if c.browser && len(c.args) == 0 {
 		// --browser produces Notes directly (injected in run); with no file/stdin

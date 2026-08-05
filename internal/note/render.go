@@ -117,13 +117,16 @@ func orDash(s, alt string) string {
 
 // jsonNote is the machine-readable shape.
 type jsonNote struct {
-	Title    string        `json:"title"`
-	Tier     string        `json:"tier"`
-	Score    int           `json:"score"`
-	Invalid  bool          `json:"invalid"`
-	Reason   string        `json:"reason,omitempty"`
-	Summary  string        `json:"summary,omitempty"`
-	Findings []jsonFinding `json:"findings"`
+	Title   string `json:"title"`
+	Tier    string `json:"tier"`
+	Score   int    `json:"score"`
+	Invalid bool   `json:"invalid"`
+	Reason  string `json:"reason,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	// Fingerprint is the upstream scanner's id, passed through so their tooling
+	// can dedupe geiger's output against their own findings.
+	Fingerprint string        `json:"fingerprint,omitempty"`
+	Findings    []jsonFinding `json:"findings"`
 }
 
 type jsonFinding struct {
@@ -152,7 +155,7 @@ func flagName(fl module.FlagLevel) string {
 // computed here (from the same score.Context the text renderer uses) so the
 // machine shape is self-contained and downstream consumers don't re-derive them.
 func JSON(n module.Note, ctx score.Context) string {
-	jn := jsonNote{Title: sanitize(n.Title), Tier: string(score.TierFor(n, ctx)), Score: score.BlastRadius(n, ctx), Invalid: n.Invalid, Reason: sanitize(n.Reason), Summary: sanitize(n.Summary), Findings: []jsonFinding{}}
+	jn := jsonNote{Title: sanitize(n.Title), Tier: string(score.TierFor(n, ctx)), Score: score.BlastRadius(n, ctx), Invalid: n.Invalid, Reason: sanitize(n.Reason), Summary: sanitize(n.Summary), Fingerprint: sanitize(n.Fingerprint), Findings: []jsonFinding{}}
 	for _, f := range n.Findings {
 		var detail []string
 		for _, d := range f.Detail {

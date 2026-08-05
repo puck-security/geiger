@@ -27,6 +27,11 @@ type Blob struct {
 	Lines   map[string]int    // 1-based source line per variable name (when known)
 	JSON    map[string]any    // populated if the whole blob is a JSON object
 	INI     []INISection
+
+	// Fingerprint is an upstream scanner's stable id for this finding, carried
+	// through untouched so that scanner's own viewer can dedupe geiger's output
+	// against its own. Empty unless the blob came from such a report.
+	Fingerprint string
 }
 
 // Parse detects the format of raw and returns a Blob. fileHint (a path or
