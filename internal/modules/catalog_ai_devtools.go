@@ -159,24 +159,26 @@ func claudeCodeOAuthSpec(base string) r.HTTP {
 		Headers: map[string]string{
 			"anthropic-version": "2023-06-01",
 			"anthropic-beta":    "oauth-2025-04-20",
+			"content-type":      "application/json",
 		},
-		// Candidate profile paths: only the ones the response actually carries are
-		// emitted, so listing a few covers the shape without guessing at one.
-		Whoami: r.GET("/api/oauth/profile").
-			Field("account", "account.email_address").
-			Field("account", "account.email").
-			Field("name", "account.full_name").
-			Field("organization", "organization.name").
-			Field("org type", "organization.organization_type").
-			Field("plan", "organization.billing_type"),
-		// Identity alone only proves the token authenticates. What it REACHES is
-		// the model surface it can drive, so size that too.
+		// Liveness is decided by a documented GA endpoint. /v1/models both proves the
+		// token authenticates and sizes what it can drive; the OAuth profile
+		// endpoint below is real but undocumented, so it is a best-effort extra
+		// rather than the thing a DEAD verdict rests on.
+		Whoami: r.GET("/v1/models").CountArrayFlag("data", "models reachable", module.FlagWarn),
 		Calls: []r.Call{
-			r.GET("/v1/models").CountArrayFlag("data", "models reachable", module.FlagWarn),
+			// Undocumented; only the paths that resolve are emitted, and a failure
+			// here is non-fatal.
+			{Method: "GET", Path: "/api/oauth/profile", Optional: true, Fields: []r.Extract{
+				{Key: "account", Path: "account.email_address", Flag: module.FlagInfo},
+				{Key: "account", Path: "account.email", Flag: module.FlagInfo},
+				{Key: "name", Path: "account.full_name", Flag: module.FlagInfo},
+				{Key: "organization", Path: "organization.name", Flag: module.FlagInfo},
+				{Key: "org type", Path: "organization.organization_type", Flag: module.FlagInfo},
+			}},
 			// Documented to accept an OAuth Bearer, but only with the org:admin
-			// scope. A 403 here is the common, uninteresting case; a 200 means this
-			// token administers the organization, which is a far bigger deal than
-			// driving Claude Code — so it is worth one optional call to find out.
+			// scope. A 403 is the common case; a 200 means this token administers
+			// the organization, which far outranks driving Claude Code.
 			{Method: "GET", Path: "/v1/organizations/me", Optional: true, Fields: []r.Extract{
 				{Key: "organization", Path: "name", Flag: module.FlagInfo},
 				{Key: "org id", Path: "id", Flag: module.FlagInfo},

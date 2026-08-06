@@ -38,8 +38,10 @@ func TestClaudeOAuthLiveTokenIsExercised(t *testing.T) {
 		_, _ = w.Write([]byte(`{"account":{"email_address":"a@b.com"},"organization":{"name":"Acme"}}`))
 	}, "sk-ant-oat01-live")
 
-	if req.URL.Path != "/api/oauth/profile" {
-		t.Errorf("called %q, want /api/oauth/profile", req.URL.Path)
+	// Liveness must rest on the documented GA endpoint, not the undocumented
+	// OAuth profile route.
+	if req.URL.Path != "/v1/models" {
+		t.Errorf("first call was %q, want /v1/models", req.URL.Path)
 	}
 	if req.Method != http.MethodGet {
 		t.Errorf("method = %s, want GET (read-only)", req.Method)
@@ -103,8 +105,8 @@ func TestClaudeOAuthCharacterizesModelReach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) < 2 || paths[1] != "/v1/models" {
-		t.Fatalf("model surface never probed, called %v", paths)
+	if len(paths) == 0 || paths[0] != "/v1/models" {
+		t.Fatalf("model surface must be the first thing probed, called %v", paths)
 	}
 	if got := indexByKey(fs)["models reachable"].Value; got != "3" {
 		t.Errorf("models reachable = %q, want 3: %+v", got, fs)
