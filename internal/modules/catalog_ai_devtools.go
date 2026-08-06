@@ -153,7 +153,13 @@ func claudeCodeOAuthSpec(base string) r.HTTP {
 		ModuleName: "claude_code_oauth",
 		Base:       base,
 		Auth:       r.AuthSpec{Kind: r.Bearer},
-		Headers:    map[string]string{"anthropic-beta": "oauth-2025-04-20"},
+		// anthropic-version is REQUIRED by the Anthropic API; without it the calls
+		// below don't return what they should. anthropic-beta is what Claude Code
+		// sends for OAuth-authenticated requests.
+		Headers: map[string]string{
+			"anthropic-version": "2023-06-01",
+			"anthropic-beta":    "oauth-2025-04-20",
+		},
 		// Candidate profile paths: only the ones the response actually carries are
 		// emitted, so listing a few covers the shape without guessing at one.
 		Whoami: r.GET("/api/oauth/profile").
@@ -167,6 +173,15 @@ func claudeCodeOAuthSpec(base string) r.HTTP {
 		// the model surface it can drive, so size that too.
 		Calls: []r.Call{
 			r.GET("/v1/models").CountArrayFlag("data", "models reachable", module.FlagWarn),
+			// Documented to accept an OAuth Bearer, but only with the org:admin
+			// scope. A 403 here is the common, uninteresting case; a 200 means this
+			// token administers the organization, which is a far bigger deal than
+			// driving Claude Code — so it is worth one optional call to find out.
+			{Method: "GET", Path: "/v1/organizations/me", Optional: true, Fields: []r.Extract{
+				{Key: "organization", Path: "name", Flag: module.FlagInfo},
+				{Key: "org id", Path: "id", Flag: module.FlagInfo},
+				{Key: "org admin", Path: "type", Flag: module.FlagForceMultiplier},
+			}},
 		},
 		Static: []module.Finding{
 			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},

@@ -110,3 +110,54 @@ func TestClaudeOAuthCharacterizesModelReach(t *testing.T) {
 		t.Errorf("models reachable = %q, want 3: %+v", got, fs)
 	}
 }
+
+// The Anthropic API requires anthropic-version; without it the calls do not
+// behave. Missing it was why the model list came back empty against the real API.
+func TestClaudeOAuthSendsRequiredVersionHeader(t *testing.T) {
+	var versions []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		versions = append(versions, r.Header.Get("Anthropic-Version"))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	m := claudeCodeOAuthSpec(srv.URL).Module()
+	if _, err := m.Recon(context.Background(), recon.New(srv.Client(), true), module.Token{}, module.Fields{"token": "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) == 0 {
+		t.Fatal("no calls made")
+	}
+	for i, v := range versions {
+		if v != "2023-06-01" {
+			t.Errorf("call %d sent anthropic-version %q, want 2023-06-01", i, v)
+		}
+	}
+}
+
+// An OAuth token that can read /v1/organizations/me holds the org:admin scope —
+// it administers the organization, which far outranks driving Claude Code.
+func TestClaudeOAuthOrgAdminIsAForceMultiplier(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/organizations/me":
+			_, _ = w.Write([]byte(`{"id":"org_123","type":"organization","name":"Acme"}`))
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer srv.Close()
+
+	m := claudeCodeOAuthSpec(srv.URL).Module()
+	fs, err := m.Recon(context.Background(), recon.New(srv.Client(), true), module.Token{}, module.Fields{"token": "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := indexByKey(fs)
+	if idx["organization"].Value != "Acme" {
+		t.Errorf("organization not extracted: %+v", fs)
+	}
+	if idx["org admin"].Flag != module.FlagForceMultiplier {
+		t.Errorf("org:admin reach should be a force multiplier: %+v", idx["org admin"])
+	}
+}
