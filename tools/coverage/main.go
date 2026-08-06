@@ -57,6 +57,7 @@ var groups = []struct {
 	{"Backup & DR", []string{"veeam", "acronis", "cohesity", "netbackup", "commvault"}},
 	{"ITSM, productivity & support", []string{
 		"servicenow", "jira", "ivanti", "snipeit", "pagerduty", "linear", "asana", "notion", "zendesk", "intercom",
+		"freshservice", "freshdesk", "freshchat", "freshsales",
 	}},
 	{"Comms, email & SMS", []string{
 		"slack", "discord_bot", "telegram_bot", "zoom", "twilio", "vonage", "sendgrid", "mailgun",

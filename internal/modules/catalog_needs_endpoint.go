@@ -45,6 +45,19 @@ var endpointRequiredServices = []struct {
 	{"Azure OpenAI", "model deployment access",
 		[]string{"AZURE_OPENAI_API_KEY", "AZURE_OPENAI_KEY"},
 		[]string{"AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_BASE_URL"}},
+	// Freshworks keys carry no prefix and no vendor gitleaks rule, so without the
+	// tenant domain there is nothing to distinguish one from any other opaque
+	// string — it degrades to generic_secret. The hint is what turns "credential-
+	// shaped value matched by variable name" into a next step.
+	{"Freshservice", "ITSM: every ticket, requester PII, the CMDB; an admin key also creates agents",
+		[]string{"FRESHSERVICE_API_KEY", "FRESH_SERVICE_API_KEY", "FRESHSERVICE_TOKEN"},
+		[]string{"FRESHSERVICE_DOMAIN", "FRESHSERVICE_URL", "FRESHSERVICE_SUBDOMAIN"}},
+	{"Freshdesk", "help desk: every ticket and contact PII; an admin key also creates agents",
+		[]string{"FRESHDESK_API_KEY", "FRESHDESK_TOKEN"},
+		[]string{"FRESHDESK_DOMAIN", "FRESHDESK_URL", "FRESHDESK_SUBDOMAIN"}},
+	{"Freshsales", "CRM contacts, accounts and deals (customer PII + pipeline)",
+		[]string{"FRESHSALES_API_KEY", "FRESHWORKS_CRM_API_KEY", "FRESHSALES_TOKEN"},
+		[]string{"FRESHSALES_URL", "FRESHSALES_DOMAIN", "FRESHSALES_BUNDLE_ALIAS"}},
 }
 
 func init() {

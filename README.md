@@ -276,7 +276,8 @@ key that runs code, wipes devices, restores backups, or reads *other* secrets is
 a force multiplier; a billed-usage API key is a warning.
 
 <details>
-<summary><b>Full coverage — 166 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
+<summary><b>Full coverage — 175 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
+
 
 **Cloud & hosting**
 
@@ -358,13 +359,18 @@ a force multiplier; a billed-usage API key is a warning.
 | `mistral` | Mistral — LLM API access (billed) |
 | `replicate` | Replicate — model runs (billed) + model access |
 | `huggingface` | Hugging Face — model/dataset access; write token can push |
-| `groq` / `together` / `deepseek` / `openrouter` / `xai` / `fireworks` | LLM API access (billed usage) |
+| `groq` | groq — LLM API access (billed usage) |
+| `together` | together — LLM API access (billed usage) |
+| `deepseek` | deepseek — LLM API access (billed usage) |
+| `openrouter` | openrouter — LLM API access (billed usage) |
+| `xai` | xai — LLM API access (billed usage) |
+| `fireworks` | fireworks — LLM API access (billed usage) |
 | `perplexity` | Perplexity — LLM API (billed usage) |
 | `elevenlabs` | ElevenLabs — voice API (billed usage + voice library) |
 | `stability` | Stability AI — image API (billed usage) |
 | `pinecone` | Pinecone — vector index read/write (embedded data) |
-| `mcp_config` | MCP config — agent credential aggregator (extracts + re-triages embedded secrets) |
-| `ai_ide_store` | AI-IDE token store (Cursor/VS Code `state.vscdb`, plaintext) |
+| `mcp_config` | MCP config — agent credential aggregator |
+| `ai_ide_store` | AI-IDE token store (plaintext SQLite) |
 
 **Secrets managers & vaults**
 
@@ -380,7 +386,7 @@ a force multiplier; a billed-usage API key is a warning.
 | `onepassword_connect` | 1Password Connect — vault item access via the Connect server |
 | `onepassword_sa` | 1Password service account — vault secret access (CLI/SDK only) |
 | `onepassword_secret_key` | 1Password Secret Key — vault-unlock half; dangerous with the master password |
-| `bitwarden` | Bitwarden API key — enumerates the vault (items encrypted without the master password) |
+| `bitwarden` | Bitwarden API key — valid; enumerates the vault (items stay encrypted without the master password) |
 | `bitwarden_vault` | Bitwarden encrypted vault — offline-crackable with the master password |
 | `keepass_db` | KeePass vault — offline-crackable to every secret with the master password |
 | `vault_export_plaintext` | plaintext credential dump — full account takeover across every listed site |
@@ -396,7 +402,6 @@ a force multiplier; a billed-usage API key is a warning.
 | `jumpcloud` | JumpCloud — directory, device & SSO admin |
 | `sailpoint` | SailPoint — identity governance (certs, provisioning) |
 | `auth0` | Auth0 — tenant management API (users, apps, rules) |
-| `workos` | WorkOS — SSO connections, Directory Sync (employee PII) & User Management |
 | `duo` | Duo — MFA admin API (bypass codes, user mgmt) |
 | `workday` | Workday — HR/finance records (PII) |
 
@@ -416,7 +421,7 @@ a force multiplier; a billed-usage API key is a warning.
 | `saltstack` | SaltStack salt-api — arbitrary module execution across minions |
 | `fleet` | Fleet (osquery) — live queries + script execution + MDM wipe |
 
-**Monitoring, observability & security posture**
+**Monitoring & observability**
 
 | Credential / app | Reach |
 |---|---|
@@ -459,6 +464,10 @@ a force multiplier; a billed-usage API key is a warning.
 | `notion` | Notion — workspace pages/databases (often secrets/PII) |
 | `zendesk` | Zendesk — support tickets (customer PII) |
 | `intercom` | Intercom — conversations & customer profiles (PII) |
+| `freshservice` | Freshservice ITSM key — tickets, requester PII and CMDB |
+| `freshdesk` | Freshdesk help desk key — tickets and contact PII |
+| `freshchat` | Freshchat — all conversations and contact PII |
+| `freshsales` | Freshsales CRM — contact PII and pipeline data |
 
 **Comms, email & SMS**
 
@@ -489,7 +498,8 @@ a force multiplier; a billed-usage API key is a warning.
 | `klaviyo` | Klaviyo — customer-profile export (PII) + campaign send |
 | `braze` | Braze — message-send to all users + profile export (PII) |
 | `segment` | Segment — customer event-pipeline access (behavioral PII) |
-| `mixpanel` / `amplitude` | product-analytics data (behavioral PII) |
+| `mixpanel` | Mixpanel — product-analytics data (behavioral PII) |
+| `amplitude` | Amplitude — product-analytics data (behavioral PII) |
 | `customerio` | Customer.io — messaging + customer data (PII) |
 | `docusign` | DocuSign — envelopes/agreements (legal docs) |
 | `dropbox` | Dropbox — file access per scope |
@@ -502,20 +512,24 @@ a force multiplier; a billed-usage API key is a warning.
 
 | Credential / app | Reach |
 |---|---|
-| `ssh_private_key` | SSH private key — fingerprint; `--live` tests GitHub/GitLab/Bitbucket access + identity |
+| `ssh_private_key` | SSH private key — confirmed git host access |
 | `kubeconfig` | kubeconfig — cluster credential |
-| `firefox_logins` | Firefox saved logins — offline-decrypted when no primary password |
-| `jwt` | decoded offline — map issuer to its provider for live recon |
+| `firefox_logins` | Firefox saved logins — offline-decryptable on-disk store |
+| `jwt` | decoded offline — no network call made; map issuer to its provider for live recon |
 | `generic_secret` | unrecognized credential (matched by name) |
-| `needs_endpoint` | recognized — provide `--endpoint` to characterize |
+| `needs_endpoint` | recognized — provide --endpoint to characterize |
 
-Plus the dev-laptop / supply-chain on-disk stores read natively:
-`~/.docker/config.json`, `~/.npmrc`, `~/.netrc`, `~/.git-credentials`, the `gh`
-CLI `hosts.yml`, `~/.databrickscfg`, Snowflake `connections.toml`, the Terraform
-CLI `credentials.tfrc.json`, `~/.vault-token`, Fly.io `config.yml`, `~/.oci/config`,
-Terraform state, and AWS-INI / GCP-SSO-MSAL JSON caches.
+**Uncategorized (add to a group in tools/coverage)**
 
-Bug reports and PRs welcome.
+| Credential / app | Reach |
+|---|---|
+| `atlassian` | Atlassian API token — set email + site to validate reach |
+| `bedrock` | Amazon Bedrock API key — foundation-model access (billable) |
+| `confluence` | Confluence (Atlassian Cloud) — full space/page read; pages often hold secrets |
+| `filestack` | Filestack API key — file upload/transform on this account |
+| `workos` | WorkOS API key — SSO/Directory Sync/User Management control |
+
+_175 credential types_
 
 </details>
 
