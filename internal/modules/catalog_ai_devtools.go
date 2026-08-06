@@ -184,13 +184,30 @@ func claudeCodeOAuthSpec(base string) r.HTTP {
 				{Key: "org id", Path: "id", Flag: module.FlagInfo},
 				{Key: "org admin", Path: "type", Flag: module.FlagForceMultiplier},
 			}},
+			// The rest of the Admin API, reached only by an org:admin token. Each is
+			// a 403 for an ordinary Claude Code token, so these findings appear
+			// exactly when the escalation is real. Counts are of the returned page,
+			// so the keys name the capability rather than claiming a total.
+			{Method: "GET", Path: "/v1/organizations/users?limit=100", Optional: true,
+				Count: &r.CountSpec{Key: "org members readable", Path: "data", ArrayLen: true, Flag: module.FlagWarn}},
+			{Method: "GET", Path: "/v1/organizations/api_keys?limit=100", Optional: true,
+				Count: &r.CountSpec{Key: "api keys readable", Path: "data", ArrayLen: true, Flag: module.FlagForceMultiplier}},
+			{Method: "GET", Path: "/v1/organizations/workspaces?limit=100", Optional: true,
+				Count: &r.CountSpec{Key: "workspaces readable", Path: "data", ArrayLen: true, Flag: module.FlagInfo}},
 		},
 		Static: []module.Finding{
 			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},
-			{Key: "scope", Value: "authenticates model requests only — not claude.ai connectors or Remote Control sessions", Flag: infoFlag},
+			{Key: "scope", Value: "scope is not visible in the token itself: a `claude setup-token` token makes model requests only, while an org:admin token reaches the Admin API — see the findings above for what this one answered", Flag: infoFlag},
 			{Key: "reach", Value: "drives Claude Code as the logged-in user (agent runs within its tool permissions) billed to that account; a refresh token mints new access tokens", Flag: fmFlag},
 		},
-		Summarize: func([]module.Finding) string {
+		// An org:admin token and a Claude Code token are indistinguishable by shape,
+		// so the summary is decided by what the Admin API actually answered.
+		Summarize: func(fs []module.Finding) string {
+			for _, f := range fs {
+				if f.Key == "api keys readable" || f.Key == "org members readable" || f.Key == "org admin" {
+					return "Anthropic OAuth token with org:admin scope — administers the organization, not just Claude Code"
+				}
+			}
 			return "Claude Code / Claude subscription OAuth token — acts as the signed-in user"
 		},
 	}
