@@ -49,6 +49,11 @@ func (m githubPAT) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 	if resp.Status == http.StatusUnauthorized {
 		return nil, errStatus(resp.Status)
 	}
+	// Transport errors, dry-runs and 401s have all returned by here, so this
+	// records an accepted-or-unexpected response — enough to keep a live token
+	// off the DEAD path when /user returns a shape we can't parse.
+	var lv liveness
+	lv.observe(resp, nil, true)
 	if sso := resp.Header.Get("X-GitHub-SSO"); sso != "" {
 		out = append(out, module.Finding{Key: "saml-sso", Value: "org requires SSO authorization", Flag: module.FlagWarn})
 	}
@@ -86,7 +91,7 @@ func (m githubPAT) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 		out = append(out, m.repoSurvey(ctx, c, tok)...)
 		out = append(out, m.orgAdmin(ctx, c, tok)...)
 	}
-	return out, nil
+	return withLiveness(out, 0, &lv), nil
 }
 
 // repoSurvey reports total accessible repos (cheap, from the Link header) plus
