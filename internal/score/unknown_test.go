@@ -28,11 +28,23 @@ func TestUndeterminedReportsUnknown(t *testing.T) {
 	}
 }
 
-// A named capability is evidence of reach and outranks "we could not tell".
-func TestForceMultiplierOutranksUndetermined(t *testing.T) {
+// On an undetermined note a force multiplier is an assertion about what the
+// credential WOULD reach, not an observation — it must not floor the tier at
+// HIGH. The capability text still rides along in the findings.
+func TestForceMultiplierDoesNotOverrideUndetermined(t *testing.T) {
 	n := module.Note{
 		Undetermined: true,
-		Findings:     []module.Finding{{Key: "admin", Value: "yes", Flag: module.FlagForceMultiplier}},
+		Findings:     []module.Finding{{Key: "reach", Value: "acts as the signed-in user", Flag: module.FlagForceMultiplier}},
+	}
+	if got := TierFor(n, Context{}); got != TierUnknown {
+		t.Errorf("tier = %s, want %s — an unexercised capability claim is not evidence", got, TierUnknown)
+	}
+}
+
+// A force multiplier on a note that WAS characterized still floors at HIGH.
+func TestForceMultiplierStillFloorsWhenDetermined(t *testing.T) {
+	n := module.Note{
+		Findings: []module.Finding{{Key: "admin", Value: "yes", Flag: module.FlagForceMultiplier}},
 	}
 	if got := TierFor(n, Context{}); got != TierHigh && got != TierCritical {
 		t.Errorf("tier = %s, want at least HIGH", got)

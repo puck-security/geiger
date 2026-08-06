@@ -90,13 +90,13 @@ func registerAnthropicEnv() {
 // header), so it must not be routed to the `anthropic` API module. Stored in
 // plaintext at ~/.claude/.credentials.json on Linux (claudeAiOauth.accessToken).
 func registerClaudeCodeOAuth() {
-	add("", staticModule{name: "claude_code_oauth",
-		summary: "Claude Code / Claude subscription OAuth token — acts as the signed-in user",
-		findings: []module.Finding{
-			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},
-			{Key: "reach", Value: "drives Claude Code as the logged-in user (agent runs within its tool permissions) billed to that account; a refresh token mints new access tokens", Flag: fmFlag},
-			{Key: "validation", Value: "recognized by shape; not exercised (OAuth Bearer + anthropic-beta header, distinct from the x-api-key API)", Flag: cantFlag},
-		}})
+	// Exercised against the OAuth-side identity endpoint, NOT the x-api-key API
+	// and NOT a model request: `claude setup-token` tokens "can only make model
+	// requests", and a model request would bill the account and land in its usage
+	// — geiger stays read-only. /api/oauth/profile answers without spending
+	// anything, and each outcome is informative: 200 live, 401 dead, 403 live but
+	// without the user:profile scope (the recipe driver reads 403 as authenticated).
+	add("", claudeCodeOAuthSpec(anthropicOAuthBase).Module())
 	recognize.RegisterRecognizer(func(b parse.Blob, _ string, _ *module.Registry) []recognize.Match {
 		var out []recognize.Match
 		seen := map[string]bool{}
@@ -142,4 +142,73 @@ func recognizeGitHubCopilot(b parse.Blob, _ string, _ *module.Registry) []recogn
 			Secret: tok, Label: "github copilot [" + host + "]"})
 	}
 	return out
+}
+
+// anthropicOAuthBase is the OAuth-side API host, separate from the x-api-key
+// API. A variable so tests can point the same recipe at a stub server.
+var anthropicOAuthBase = "https://api.anthropic.com"
+
+func claudeCodeOAuthSpec(base string) r.HTTP {
+	return r.HTTP{
+		ModuleName: "claude_code_oauth",
+		Base:       base,
+		Auth:       r.AuthSpec{Kind: r.Bearer},
+		// anthropic-version is REQUIRED by the Anthropic API; without it the calls
+		// below don't return what they should. anthropic-beta is what Claude Code
+		// sends for OAuth-authenticated requests.
+		Headers: map[string]string{
+			"anthropic-version": "2023-06-01",
+			"anthropic-beta":    "oauth-2025-04-20",
+			"content-type":      "application/json",
+		},
+		// Liveness is decided by a documented GA endpoint. /v1/models both proves the
+		// token authenticates and sizes what it can drive; the OAuth profile
+		// endpoint below is real but undocumented, so it is a best-effort extra
+		// rather than the thing a DEAD verdict rests on.
+		Whoami: r.GET("/v1/models").CountArrayFlag("data", "models reachable", module.FlagWarn),
+		Calls: []r.Call{
+			// Undocumented; only the paths that resolve are emitted, and a failure
+			// here is non-fatal.
+			{Method: "GET", Path: "/api/oauth/profile", Optional: true, Fields: []r.Extract{
+				{Key: "account", Path: "account.email_address", Flag: module.FlagInfo},
+				{Key: "account", Path: "account.email", Flag: module.FlagInfo},
+				{Key: "name", Path: "account.full_name", Flag: module.FlagInfo},
+				{Key: "organization", Path: "organization.name", Flag: module.FlagInfo},
+				{Key: "org type", Path: "organization.organization_type", Flag: module.FlagInfo},
+			}},
+			// Documented to accept an OAuth Bearer, but only with the org:admin
+			// scope. A 403 is the common case; a 200 means this token administers
+			// the organization, which far outranks driving Claude Code.
+			{Method: "GET", Path: "/v1/organizations/me", Optional: true, Fields: []r.Extract{
+				{Key: "organization", Path: "name", Flag: module.FlagInfo},
+				{Key: "org id", Path: "id", Flag: module.FlagInfo},
+				{Key: "org admin", Path: "type", Flag: module.FlagForceMultiplier},
+			}},
+			// The rest of the Admin API, reached only by an org:admin token. Each is
+			// a 403 for an ordinary Claude Code token, so these findings appear
+			// exactly when the escalation is real. Counts are of the returned page,
+			// so the keys name the capability rather than claiming a total.
+			{Method: "GET", Path: "/v1/organizations/users?limit=100", Optional: true,
+				Count: &r.CountSpec{Key: "org members readable", Path: "data", ArrayLen: true, Flag: module.FlagWarn}},
+			{Method: "GET", Path: "/v1/organizations/api_keys?limit=100", Optional: true,
+				Count: &r.CountSpec{Key: "api keys readable", Path: "data", ArrayLen: true, Flag: module.FlagForceMultiplier}},
+			{Method: "GET", Path: "/v1/organizations/workspaces?limit=100", Optional: true,
+				Count: &r.CountSpec{Key: "workspaces readable", Path: "data", ArrayLen: true, Flag: module.FlagInfo}},
+		},
+		Static: []module.Finding{
+			{Key: "type", Value: "Anthropic OAuth token (sk-ant-oat/ort… — Claude Code / Claude.ai subscription auth, not an API key)", Flag: infoFlag},
+			{Key: "scope", Value: "scope is not visible in the token itself: a `claude setup-token` token makes model requests only, while an org:admin token reaches the Admin API — see the findings above for what this one answered", Flag: infoFlag},
+			{Key: "reach", Value: "drives Claude Code as the logged-in user (agent runs within its tool permissions) billed to that account; a refresh token mints new access tokens", Flag: fmFlag},
+		},
+		// An org:admin token and a Claude Code token are indistinguishable by shape,
+		// so the summary is decided by what the Admin API actually answered.
+		Summarize: func(fs []module.Finding) string {
+			for _, f := range fs {
+				if f.Key == "api keys readable" || f.Key == "org members readable" || f.Key == "org admin" {
+					return "Anthropic OAuth token with org:admin scope — administers the organization, not just Claude Code"
+				}
+			}
+			return "Claude Code / Claude subscription OAuth token — acts as the signed-in user"
+		},
+	}
 }

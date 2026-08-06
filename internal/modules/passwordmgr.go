@@ -94,7 +94,16 @@ func (s staticModule) Recon(context.Context, *recon.Client, module.Token, module
 }
 
 func (s staticModule) Summarize(title string, fs []module.Finding) module.Note {
-	return module.Note{Title: title, Findings: fs, Summary: s.summary}
+	// A static module makes no call, so nothing here was observed — the findings
+	// describe what the credential WOULD reach if it is still valid. Saying HIGH
+	// off an unexercised capability claim invents a severity, so the note reports
+	// UNKNOWN and names the capability in its findings instead. A module that
+	// gains a real validation call should stop being static.
+	return module.Note{
+		Title: title, Findings: fs, Summary: s.summary,
+		Undetermined: true,
+		Reason:       "recognized by shape; not exercised — no read-only call implemented for this credential type",
+	}
 }
 
 // ---- KeePass database (.kdbx) ----

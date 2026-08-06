@@ -171,11 +171,18 @@ func TierFor(n module.Note, ctx Context) Tier {
 	s := BlastRadius(n, ctx)
 	ctxHit := ctx.Matches(n)
 	fm := hasForceMultiplier(n)
-	// Attempted but undetermined: the credential was neither disproved nor shown
-	// to reach anything, so report that rather than deriving a severity from
-	// descriptive findings (an engine name, a username) that demonstrate nothing.
-	// A crown-jewel context hit or a named capability still outranks it.
-	if n.Undetermined && !fm && !ctxHit {
+	// Undetermined: neither disproved nor shown to reach anything. Report that
+	// rather than deriving a severity from findings that demonstrate nothing.
+	//
+	// A force multiplier does NOT override this. On an undetermined note the
+	// capability is geiger's own claim about what the credential WOULD reach if
+	// valid — asserted, not observed — and letting an assertion floor the tier at
+	// HIGH is the same invented severity in a different costume. The claim still
+	// rides along in the findings, so the reader sees the stakes.
+	//
+	// An operator's crown-jewel match does still win: that is external input
+	// saying "this touches something I care about", not geiger's own guess.
+	if n.Undetermined && !ctxHit {
 		return TierUnknown
 	}
 	switch {
