@@ -78,10 +78,16 @@ func (m duoAdmin) Recon(ctx context.Context, c *recon.Client, _ module.Token, f 
 	host, ikey, skey := f["host"], f["ikey"], f["skey"]
 	var out []module.Finding
 	out = append(out, module.Finding{Key: "integration key", Value: ikey, Flag: module.FlagInfo})
+	// The ikey above is an echo of our own input, so it is not evidence Duo
+	// answered. Only findings past this mark are; see withLiveness.
+	evidence := len(out)
+	var lv liveness
 
 	// users: validates the credential and sizes the directory.
 	if req, err := duoSignedGET(ctx, host, ikey, skey, "/admin/v1/users", url.Values{"limit": {"1"}}); err == nil {
-		if resp, err := c.Do(req, recon.CallOpts{}); err == nil && !resp.DryRun && resp.Status < 300 {
+		resp, err := c.Do(req, recon.CallOpts{})
+		lv.observe(resp, err, true)
+		if err == nil && !resp.DryRun && resp.Status < 300 {
 			if md, ok := jsonDecode(resp.Body)["metadata"].(map[string]any); ok {
 				if n, ok := md["total_objects"].(float64); ok {
 					out = append(out, module.Finding{Key: "users", Value: strconv.Itoa(int(n)), Flag: module.FlagInfo})
@@ -91,12 +97,14 @@ func (m duoAdmin) Recon(ctx context.Context, c *recon.Client, _ module.Token, f 
 	}
 
 	if c.MinFootprint() {
-		return out, nil
+		return withLiveness(out, evidence, &lv), nil
 	}
 
 	// integrations: each object exposes another integration's secret_key.
 	if req, err := duoSignedGET(ctx, host, ikey, skey, "/admin/v3/integrations", url.Values{"limit": {"1"}}); err == nil {
-		if resp, err := c.Do(req, recon.CallOpts{}); err == nil && !resp.DryRun && resp.Status < 300 {
+		resp, err := c.Do(req, recon.CallOpts{})
+		lv.observe(resp, err, false)
+		if err == nil && !resp.DryRun && resp.Status < 300 {
 			if md, ok := jsonDecode(resp.Body)["metadata"].(map[string]any); ok {
 				if n, ok := md["total_objects"].(float64); ok {
 					out = append(out, module.Finding{Key: "integrations", Value: strconv.Itoa(int(n)) + " (each exposes its secret_key — read = credential theft)", Flag: module.FlagForceMultiplier})
@@ -104,7 +112,7 @@ func (m duoAdmin) Recon(ctx context.Context, c *recon.Client, _ module.Token, f 
 			}
 		}
 	}
-	return out, nil
+	return withLiveness(out, evidence, &lv), nil
 }
 
 // Harvest pulls every reachable integration's secret_key (gated).

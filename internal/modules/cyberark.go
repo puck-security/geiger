@@ -86,11 +86,14 @@ func conjurAuthHeader(tok string) string { return `Token token="` + tok + `"` }
 func (m conjur) Recon(ctx context.Context, c *recon.Client, t module.Token, f module.Fields) ([]module.Finding, error) {
 	var out []module.Finding
 	account := f["account"]
+	var lv liveness
 
 	// whoami: who is this token / role.
 	req, _ := recon.NewRequest(ctx, http.MethodGet, strings.TrimRight(f["endpoint"], "/")+"/whoami", nil)
 	req.Header.Set("Authorization", conjurAuthHeader(t.Bearer))
-	if resp, err := c.Do(req, recon.CallOpts{}); err == nil && !resp.DryRun && resp.Status < 300 {
+	resp, err := c.Do(req, recon.CallOpts{})
+	lv.observe(resp, err, true)
+	if err == nil && !resp.DryRun && resp.Status < 300 {
 		d := jsonDecode(resp.Body)
 		if u, _ := d["username"].(string); u != "" {
 			out = append(out, module.Finding{Key: "role", Value: u, Flag: module.FlagInfo})
@@ -102,19 +105,21 @@ func (m conjur) Recon(ctx context.Context, c *recon.Client, t module.Token, f mo
 	}
 
 	if c.MinFootprint() {
-		return out, nil
+		return withLiveness(out, 0, &lv), nil
 	}
 
 	// size the secret blast radius (count of reachable variables).
 	cu := strings.TrimRight(f["endpoint"], "/") + "/resources/" + url.PathEscape(account) + "?kind=variable&count=true"
 	creq, _ := recon.NewRequest(ctx, http.MethodGet, cu, nil)
 	creq.Header.Set("Authorization", conjurAuthHeader(t.Bearer))
-	if resp, err := c.Do(creq, recon.CallOpts{}); err == nil && !resp.DryRun && resp.Status < 300 {
-		if n, ok := jsonDecode(resp.Body)["count"].(float64); ok {
+	cresp, cerr := c.Do(creq, recon.CallOpts{})
+	lv.observe(cresp, cerr, false)
+	if cerr == nil && !cresp.DryRun && cresp.Status < 300 {
+		if n, ok := jsonDecode(cresp.Body)["count"].(float64); ok {
 			out = append(out, module.Finding{Key: "secrets in reach", Value: strconv.Itoa(int(n)) + " variables", Flag: module.FlagForceMultiplier})
 		}
 	}
-	return out, nil
+	return withLiveness(out, 0, &lv), nil
 }
 
 // Harvest reads the values of every reachable Conjur variable (gated).
