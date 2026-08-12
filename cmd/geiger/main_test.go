@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +18,37 @@ func captureRun(statusOn bool, c config) (stdout, stderr string, code int) {
 	var out, errb bytes.Buffer
 	code = run(&out, &errb, statusOn, c)
 	return out.String(), errb.String(), code
+}
+
+// AWS SigV4 signs with the wall clock (internal/sign/sigv4.go). Two runs that
+// cross a second boundary produce a different X-Amz-Date and a different
+// signature, so the dry-run curl preview is not stable between them. Tests that
+// compare the stdout of two runs are about the effect of a flag, not about the
+// signature, so they remove the signing material first.
+var awsSigningMaterial = regexp.MustCompile(`Authorization: [^']*|X-Amz-Date: [^']*`)
+
+func withoutSigningMaterial(s string) string {
+	return awsSigningMaterial.ReplaceAllString(s, "<signing>")
+}
+
+// withoutSigningMaterial must hide the signature and the date, and nothing
+// else. If it hides more, the two comparison tests stop testing their subject.
+func TestWithoutSigningMaterialHidesOnlyTheSignature(t *testing.T) {
+	const a = "curl -H 'Authorization: …A256 …uest, …2e2f' -H 'X-Amz-Date: …700Z' 'https://sts.amazonaws.com/'"
+	const b = "curl -H 'Authorization: …A256 …uest, …f23b' -H 'X-Amz-Date: …701Z' 'https://sts.amazonaws.com/'"
+	if withoutSigningMaterial(a) != withoutSigningMaterial(b) {
+		t.Errorf("a different signature must not count as a difference:\n%q\n%q",
+			withoutSigningMaterial(a), withoutSigningMaterial(b))
+	}
+	// A change anywhere else must survive.
+	c := strings.Replace(b, "sts.amazonaws.com", "iam.amazonaws.com", 1)
+	if withoutSigningMaterial(b) == withoutSigningMaterial(c) {
+		t.Error("a different URL must count as a difference")
+	}
+	d := strings.Replace(b, "curl", "curl --fail", 1)
+	if withoutSigningMaterial(b) == withoutSigningMaterial(d) {
+		t.Error("a different command must count as a difference")
+	}
 }
 
 // The central guarantee: stdout is byte-identical whether or not the stderr
@@ -38,7 +70,7 @@ func TestStatusNeverLeaksToStdout(t *testing.T) {
 	if off == "" {
 		t.Fatal("expected stdout output")
 	}
-	if off != on {
+	if withoutSigningMaterial(off) != withoutSigningMaterial(on) {
 		t.Errorf("stdout differs when the status line is toggled — it must not:\n--- status off ---\n%q\n--- status on ---\n%q", off, on)
 	}
 	// The header lands on stderr regardless (it's not the transient line)…
@@ -67,7 +99,7 @@ func TestQuietSilencesStderr(t *testing.T) {
 	if strings.TrimSpace(quietErr) != "" {
 		t.Errorf("-q should produce no stderr, got %q", quietErr)
 	}
-	if loud != quiet {
+	if withoutSigningMaterial(loud) != withoutSigningMaterial(quiet) {
 		t.Errorf("-q changed stdout (it must not): %q vs %q", loud, quiet)
 	}
 }
