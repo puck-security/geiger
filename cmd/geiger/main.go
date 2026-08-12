@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -45,6 +46,7 @@ type config struct {
 func main() {
 	var c config
 	showVersion := flag.Bool("version", false, "print version and exit")
+	listModules := flag.Bool("list-modules", false, "print the registered credential modules as JSON (name + whether the credential lives in a file a scanner must locate) and exit")
 	flag.BoolVar(&c.live, "live", false, "actually make recon calls (default: dry-run, prints planned calls)")
 	flag.BoolVar(&c.intrusive, "intrusive", false, "permit read-only-but-invasive actions: connect to databases, hit cluster APIs, harvest downstream secrets (requires --live)")
 	flag.BoolVar(&c.minFootprint, "min-footprint", false, "OPSEC: run only the identity (whoami) call per credential, skip inventory fan-out")
@@ -83,6 +85,17 @@ func main() {
 	if *showVersion {
 		fmt.Println("geiger", version)
 		fmt.Println("by puck.security")
+		return
+	}
+	// --list-modules is pure introspection of the registry: no input, no
+	// network, no recon. It exists so a consumer that decides WHAT geiger gets
+	// handed (a fleet scanner's path catalog) can assert its own coverage
+	// against this registry instead of the two drifting silently apart.
+	if *listModules {
+		if err := printModuleListing(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "geiger:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	c.args = flag.Args()
@@ -736,11 +749,25 @@ flags:
                       (databases,cloud,secrets,ai,vcs,kubernetes,identity,itsm,backup,endpoint)
   --skip TYPES        exclude module names or categories from recon
   --min-severity TIER only print findings >= tier (critical|high|medium|low|info|dead)
+  --list-modules      print the registered modules as JSON and exit (name +
+                      whether the credential lives in a file a scanner must find)
   -o, --output FILE   write results to FILE instead of stdout (0600, color off)
   --user-agent UA     User-Agent for recon calls (default geiger/<version>)
   -v                  show planned/executed calls
   -q                  quiet: suppress the stderr status header and progress
 `)
+}
+
+// printModuleListing writes the registry as a JSON array, one object per
+// registered module. Indented and newline-terminated because the expected use
+// is a vendored snapshot in another repository, reviewed as a diff.
+func printModuleListing(w io.Writer) error {
+	b, err := json.MarshalIndent(gmodule.Default.Listings(), "", "  ")
+	if err != nil {
+		return fmt.Errorf("--list-modules: %w", err)
+	}
+	_, err = fmt.Fprintf(w, "%s\n", b)
+	return err
 }
 
 func readSources(c config, st *status) ([]pipeline.Source, error) {
