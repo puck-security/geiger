@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/url"
@@ -428,10 +429,19 @@ func probeGitHost(ctx context.Context, signer ssh.Signer, addr string) (accepted
 		return true, "", false // authenticated; couldn't open a session for the banner
 	}
 	defer sess.Close()
-	// git hosts print an identity banner then exit non-zero; CombinedOutput
-	// captures it (and ignores the expected non-zero exit).
-	b, _ := sess.CombinedOutput("")
-	return true, string(b), false
+	// Ask for a shell — the same request `ssh -T git@github.com` makes, and the
+	// only one the git hosts answer with the identity banner ("Hi octocat!").
+	// An exec request carries a command, and the hosts reply to anything that
+	// isn't git-upload-pack/git-receive-pack with a usage error that names no
+	// account. The banner arrives on stderr, so capture both streams; the
+	// session then exits non-zero, which is expected and not an error here.
+	var buf bytes.Buffer
+	sess.Stdout, sess.Stderr = &buf, &buf
+	if err := sess.Shell(); err != nil {
+		return true, "", false // authenticated; the host refused a shell session
+	}
+	_ = sess.Wait() // returns after both streams are drained
+	return true, buf.String(), false
 }
 
 // gitIdentity pulls the account (or deploy-key "owner/repo") out of each host's
