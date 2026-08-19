@@ -103,6 +103,14 @@ func BlastRadius(n module.Note, ctx Context) int {
 	s := 0
 	forceMultipliers := 0
 	for _, f := range n.Findings {
+		// FlagNone is a context line: local hints, sibling locations, ids. It
+		// describes the credential's surroundings, not what the credential was
+		// shown to reach. Skip the whole finding — not just its flag weight —
+		// so a candidate hostname like "prod-bastion" can't move the tier
+		// through the sensitivity or reach bonuses below either.
+		if f.Flag == module.FlagNone {
+			continue
+		}
 		switch f.Flag {
 		case module.FlagForceMultiplier:
 			forceMultipliers++

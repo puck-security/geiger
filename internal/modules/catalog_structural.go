@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/url"
@@ -320,10 +321,15 @@ func (sshKey) Recon(ctx context.Context, c *recon.Client, _ module.Token, f modu
 	if c.Correlate() {
 		if home, err := os.UserHomeDir(); err == nil {
 			if hosts := sshCandidateHosts(home); len(hosts) > 0 {
+				// A context line, not evidence: these hosts come from the local
+				// ~/.ssh and shell history, and nothing here shows the key
+				// authenticates to any of them. FlagNone keeps the hosts on the
+				// report without moving the tier, so --ssh-correlate cannot
+				// float an unaccepted key above a live one.
 				out = append(out, module.Finding{
 					Key:   "candidate targets",
 					Value: strings.Join(hosts, ", ") + "  (from local ~/.ssh + history — not confirmed)",
-					Flag:  module.FlagWarn,
+					Flag:  module.FlagNone,
 				})
 			}
 		}
@@ -428,10 +434,22 @@ func probeGitHost(ctx context.Context, signer ssh.Signer, addr string) (accepted
 		return true, "", false // authenticated; couldn't open a session for the banner
 	}
 	defer sess.Close()
-	// git hosts print an identity banner then exit non-zero; CombinedOutput
-	// captures it (and ignores the expected non-zero exit).
-	b, _ := sess.CombinedOutput("")
-	return true, string(b), false
+	// Ask for a shell — the same request `ssh -T git@github.com` makes, and the
+	// only one the git hosts answer with the identity banner ("Hi octocat!").
+	// An exec request carries a command, and the hosts reply to anything that
+	// isn't git-upload-pack/git-receive-pack with a usage error that names no
+	// account. The banner arrives on stderr, so capture both streams; the
+	// session then exits non-zero, which is expected and not an error here.
+	// One buffer per stream: ssh copies stdout and stderr on separate goroutines,
+	// so a shared buffer is a data race. Wait returns after both copies finish,
+	// which is what makes it safe to read them here.
+	var stdout, stderr bytes.Buffer
+	sess.Stdout, sess.Stderr = &stdout, &stderr
+	if err := sess.Shell(); err != nil {
+		return true, "", false // authenticated; the host refused a shell session
+	}
+	_ = sess.Wait()
+	return true, stdout.String() + stderr.String(), false
 }
 
 // gitIdentity pulls the account (or deploy-key "owner/repo") out of each host's

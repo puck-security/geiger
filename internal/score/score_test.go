@@ -85,6 +85,36 @@ func TestSingleForceMultiplierFloorsHigh(t *testing.T) {
 	}
 }
 
+func TestFlagNoneIsWeightless(t *testing.T) {
+	// FlagNone marks a context line — where else the credential sits, which hosts
+	// it might target. It describes surroundings, not proven reach, so it must not
+	// move the score by any route: not the flag weight, not the reach bonus, not
+	// the sensitivity tags. An SSH key nobody accepted stays LOW when
+	// --ssh-correlate adds candidate hosts, so it can't outrank a live key.
+	base := note(false,
+		module.Finding{Key: "type", Value: "ssh-ed25519", Flag: module.FlagInfo},
+		module.Finding{Key: "fingerprint", Value: "SHA256:abc", Flag: module.FlagInfo},
+		module.Finding{Key: "host acceptance", Value: "not accepted by GitHub/GitLab/Bitbucket", Flag: module.FlagInfo})
+	ctxLines := []module.Finding{
+		{Key: "candidate targets", Value: "bastion.example.com  (from local ~/.ssh + history — not confirmed)", Flag: module.FlagNone},
+		{Key: "candidate targets", Value: "prod-db.corp, admin.corp  (not confirmed)", Flag: module.FlagNone}, // sensitivity words
+		{Key: "candidate targets", Value: "reached 4200 hosts", Flag: module.FlagNone},                        // reach-looking count
+	}
+	want := BlastRadius(base, Context{})
+	if TierFor(base, Context{}) != TierLow {
+		t.Fatalf("baseline tier = %s, want LOW (test premise)", TierFor(base, Context{}))
+	}
+	for _, f := range ctxLines {
+		n := note(false, append(append([]module.Finding{}, base.Findings...), f)...)
+		if got := BlastRadius(n, Context{}); got != want {
+			t.Errorf("context line %q changed the score: %d, want %d", f.Value, got, want)
+		}
+		if got := TierFor(n, Context{}); got != TierLow {
+			t.Errorf("context line %q changed the tier: %s, want LOW", f.Value, got)
+		}
+	}
+}
+
 func TestParseTierAndRank(t *testing.T) {
 	cases := map[string]Tier{"critical": TierCritical, "CRIT": TierCritical, "High": TierHigh, "med": TierMedium, "low": TierLow, "info": TierInfo, "dead": TierDead}
 	for in, want := range cases {

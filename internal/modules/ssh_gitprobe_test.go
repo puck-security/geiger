@@ -78,18 +78,32 @@ func startGitSSHServer(t *testing.T, clientPub ssh.PublicKey, accept bool, banne
 			}
 			go func() {
 				for req := range creqs {
-					if req.Type == "exec" || req.Type == "shell" {
+					// Mimic the real git hosts: the identity banner is the
+					// greeting for a plain shell session (`ssh -T`). An exec
+					// request carries a command, and anything that isn't a git
+					// verb gets a usage error naming no account. A probe that
+					// asks for the wrong one must come back empty-handed here
+					// too, or the test can't catch it.
+					switch req.Type {
+					case "shell":
 						if req.WantReply {
 							req.Reply(true, nil)
 						}
-						ch.Write([]byte(banner))
-						ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
-						ch.Close()
-						return
+						ch.Stderr().Write([]byte(banner))
+					case "exec":
+						if req.WantReply {
+							req.Reply(true, nil)
+						}
+						ch.Stderr().Write([]byte("Invalid command. Shell access is disabled.\n"))
+					default:
+						if req.WantReply {
+							req.Reply(false, nil)
+						}
+						continue
 					}
-					if req.WantReply {
-						req.Reply(false, nil)
-					}
+					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+					ch.Close()
+					return
 				}
 			}()
 		}
