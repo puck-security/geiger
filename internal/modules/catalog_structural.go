@@ -321,10 +321,15 @@ func (sshKey) Recon(ctx context.Context, c *recon.Client, _ module.Token, f modu
 	if c.Correlate() {
 		if home, err := os.UserHomeDir(); err == nil {
 			if hosts := sshCandidateHosts(home); len(hosts) > 0 {
+				// A context line, not evidence: these hosts come from the local
+				// ~/.ssh and shell history, and nothing here shows the key
+				// authenticates to any of them. FlagNone keeps the hosts on the
+				// report without moving the tier, so --ssh-correlate cannot
+				// float an unaccepted key above a live one.
 				out = append(out, module.Finding{
 					Key:   "candidate targets",
 					Value: strings.Join(hosts, ", ") + "  (from local ~/.ssh + history — not confirmed)",
-					Flag:  module.FlagWarn,
+					Flag:  module.FlagNone,
 				})
 			}
 		}
