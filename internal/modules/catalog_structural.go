@@ -440,13 +440,16 @@ func probeGitHost(ctx context.Context, signer ssh.Signer, addr string) (accepted
 	// isn't git-upload-pack/git-receive-pack with a usage error that names no
 	// account. The banner arrives on stderr, so capture both streams; the
 	// session then exits non-zero, which is expected and not an error here.
-	var buf bytes.Buffer
-	sess.Stdout, sess.Stderr = &buf, &buf
+	// One buffer per stream: ssh copies stdout and stderr on separate goroutines,
+	// so a shared buffer is a data race. Wait returns after both copies finish,
+	// which is what makes it safe to read them here.
+	var stdout, stderr bytes.Buffer
+	sess.Stdout, sess.Stderr = &stdout, &stderr
 	if err := sess.Shell(); err != nil {
 		return true, "", false // authenticated; the host refused a shell session
 	}
-	_ = sess.Wait() // returns after both streams are drained
-	return true, buf.String(), false
+	_ = sess.Wait()
+	return true, stdout.String() + stderr.String(), false
 }
 
 // gitIdentity pulls the account (or deploy-key "owner/repo") out of each host's
