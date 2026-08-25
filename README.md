@@ -276,7 +276,7 @@ key that runs code, wipes devices, restores backups, or reads *other* secrets is
 a force multiplier; a billed-usage API key is a warning.
 
 <details>
-<summary><b>Full coverage — 175 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
+<summary><b>Full coverage — 176 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
 
 
 **Cloud & hosting**
@@ -289,6 +289,7 @@ a force multiplier; a billed-usage API key is a warning.
 | `gcp_service_account` | GCP service account — exchanged a read-only token |
 | `gcp_adc` | gcloud user credentials — delegated user access |
 | `gcp_metadata` | GCP instance service account — token-scoped reach |
+| `google_oauth_client` | Google OAuth client secret — valid; redeems this app's tokens |
 | `azure_msal` | Azure CLI session — Entra identity, refreshable headlessly |
 | `alibaba` | Alibaba Cloud RAM credential |
 | `oci_instance_principal` | OCI instance principal |
@@ -529,7 +530,7 @@ a force multiplier; a billed-usage API key is a warning.
 | `filestack` | Filestack API key — file upload/transform on this account |
 | `workos` | WorkOS API key — SSO/Directory Sync/User Management control |
 
-_175 credential types_
+_176 credential types_
 
 </details>
 
