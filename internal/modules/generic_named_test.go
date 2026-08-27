@@ -64,3 +64,12 @@ func TestGenericSecretSuppressedWhenClaimed(t *testing.T) {
 		}
 	}
 }
+
+// google_oauth_client claims GOCSPX- values, so this hint is only reached when
+// that recognizer stood down — a Google credential file shape it deliberately
+// leaves to another module. Naming the credential still beats "unrecognized".
+func TestPrefixHintNamesGoogleClientSecret(t *testing.T) {
+	if h := prefixHint("GOCSPX-MjlfId78mAbCdEfGhIjKlMnOp"); h == "" {
+		t.Fatal("GOCSPX- should be named as a Google OAuth client secret")
+	}
+}

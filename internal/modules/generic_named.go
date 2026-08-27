@@ -113,6 +113,8 @@ func prefixHint(v string) string {
 		return "Anthropic OAuth token (Claude subscription)"
 	case strings.HasPrefix(v, "sk-ant-"):
 		return "Anthropic API key"
+	case strings.HasPrefix(v, "GOCSPX-"):
+		return "Google OAuth client secret"
 	case strings.HasPrefix(v, "xoxe-"):
 		return "Slack token-rotation refresh token"
 	case strings.HasPrefix(v, "eyJ"):
