@@ -5,14 +5,11 @@
 
 **Is it still live, what does it reach, and how bad?** Read-only blast-radius triage for leaked credentials.
 
-[![license: MIT](https://img.shields.io/badge/license-MIT-3ddc84.svg)](LICENSE)
-[![release](https://img.shields.io/badge/release-v1.0.1-3ddc84.svg)](../../releases)
+[![license: MIT](https://img.shields.io/github/license/puck-security/geiger?color=3ddc84)](LICENSE)
+[![release](https://img.shields.io/github/v/release/puck-security/geiger?color=3ddc84)](../../releases)
+[![ci](https://img.shields.io/github/actions/workflow/status/puck-security/geiger/ci.yml?branch=main&label=ci)](../../actions/workflows/ci.yml)
 ![go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8.svg)
 ![recon: read-only](https://img.shields.io/badge/recon-read--only-3ddc84.svg)
-<!-- Once the repo is public, swap the static release/license badges for live ones:
-     https://img.shields.io/github/v/release/puck-security/geiger
-     https://img.shields.io/github/license/puck-security/geiger
-     https://img.shields.io/github/actions/workflow/status/puck-security/geiger/ci.yml?label=ci -->
 
 <img src="assets/geiger-demo.svg" width="660"
   alt="geiger triaging an AWS key — HIGH: prod account with secrets-manager access">
