@@ -24,7 +24,8 @@ var groups = []struct {
 		"aws", "aws_sso", "aws_sso_registration", "gcp_service_account", "gcp_adc", "gcp_metadata",
 		"google_oauth_client", "azure_msal",
 		"alibaba", "oci_instance_principal", "digitalocean", "digitalocean_oauth", "linode", "cloudflare", "cloudflare_global", "fastly",
-		"heroku", "render", "railway", "flyio", "netlify", "vercel", "tailscale", "terraform_cloud", "oci_config",
+		"heroku", "render", "railway", "flyio", "netlify", "vercel",
+		"tailscale", "tailscale_oauth_client", "tailscale_auth_key", "terraform_cloud", "oci_config",
 	}},
 	{"Source control & packages", []string{
 		"github_pat", "gitlab", "gitlab_ci_token", "jfrog", "docker_registry", "npm", "pypi", "rubygems",

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/puck-security/geiger/internal/auth"
 	"github.com/puck-security/geiger/internal/module"
@@ -21,7 +20,6 @@ func init() {
 	registerSumoLogic()
 	registerLacework()
 	registerWiz()
-	registerTailscale()
 	registerRender()
 	registerRailway()
 	registerFlyio()
@@ -127,32 +125,6 @@ func registerWiz() {
 		return []recognize.Match{{Module: "wiz",
 			Fields: module.Fields{"client_id": id, "client_secret": secret, "endpoint": ep, "auth_url": firstVar(b.Vars, "WIZ_AUTH_URL")},
 			Secret: secret, Label: "WIZ_CLIENT_SECRET"}}
-	})
-}
-
-// --- Tailscale: API key (tskey-api-…) bearer ---
-
-func registerTailscale() {
-	add("", r.HTTP{
-		ModuleName: "tailscale", Base: "https://api.tailscale.com", Auth: r.AuthSpec{Kind: r.Bearer},
-		Whoami:    r.GET("/api/v2/tailnet/-/devices").CountArrayFlag("devices", "devices (network nodes)", warnFlag),
-		Static:    []module.Finding{{Key: "reach", Value: "manage the tailnet — read all devices, edit ACLs, and mint auth keys to enroll attacker-controlled nodes into the private network", Flag: fmFlag}},
-		Summarize: func([]module.Finding) string { return "Tailscale — tailnet device/ACL admin + auth-key minting" },
-	}.Module())
-	recognize.RegisterRecognizer(func(b parse.Blob, _ string, _ *module.Registry) []recognize.Match {
-		tok := firstVar(b.Vars, "TAILSCALE_API_KEY", "TS_API_KEY", "TAILSCALE_APIKEY")
-		if tok == "" { // value-prefix: API keys are tskey-api-…
-			for _, v := range b.Vars {
-				if strings.HasPrefix(v, "tskey-api-") {
-					tok = v
-					break
-				}
-			}
-		}
-		if tok == "" {
-			return nil
-		}
-		return []recognize.Match{{Module: "tailscale", Fields: module.Fields{"token": tok}, Secret: tok, Label: "TAILSCALE_API_KEY"}}
 	})
 }
 

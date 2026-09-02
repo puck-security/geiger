@@ -305,7 +305,9 @@ a force multiplier; a billed-usage API key is a warning.
 | `flyio` | Fly.io — machine deploy (code exec) + app-secret access |
 | `netlify` | Netlify — site deploy + build env vars |
 | `vercel` | Vercel — project deploy + env vars |
-| `tailscale` | Tailscale — tailnet device/ACL admin + auth-key minting |
+| `tailscale` | Tailscale API token — tailnet device/ACL admin + auth-key minting |
+| `tailscale_oauth_client` | Tailscale OAuth client (non-expiring) — tailnet device/ACL admin + auth-key minting |
+| `tailscale_auth_key` | Tailscale auth key — enrolls a device into the tailnet; not verifiable read-only |
 | `terraform_cloud` | Terraform Cloud — workspace state & variables (often secrets) |
 | `oci_config` | Oracle Cloud — API signing config (key_file referenced, not inline) |
 

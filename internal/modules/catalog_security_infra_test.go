@@ -64,20 +64,6 @@ func TestWizClientCredentialsAndGraphQL(t *testing.T) {
 	}
 }
 
-func TestTailscaleRecon(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v2/tailnet/-/devices", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tskey-api-abc" {
-			t.Errorf("bearer not set: %q", r.Header.Get("Authorization"))
-		}
-		respond(w, `{"devices":[{"nodeId":"n1"},{"nodeId":"n2"}]}`)
-	})
-	got := driveModule(t, "tailscale", module.Fields{"token": "tskey-api-abc"}, mux)
-	if got["devices (network nodes)"].Value != "2" || got["reach"].Flag != module.FlagForceMultiplier {
-		t.Errorf("tailscale fields wrong: %+v", got)
-	}
-}
-
 func TestRenderRailwayFlyioRecon(t *testing.T) {
 	// Render
 	rmux := http.NewServeMux()
@@ -104,7 +90,6 @@ func TestSecurityInfraRecognizers(t *testing.T) {
 		{"sumologic (default host)", "SUMO_ACCESS_ID=aid\nSUMO_ACCESS_KEY=akey\n", "", "sumologic", "akey"},
 		{"lacework (account→host)", "LACEWORK_ACCOUNT=acme\nLACEWORK_API_KEY=k\nLACEWORK_API_SECRET=s\n", "", "lacework", "s"},
 		{"wiz", "WIZ_API_URL=https://api.us1.app.wiz.io/graphql\nWIZ_CLIENT_ID=c\nWIZ_CLIENT_SECRET=s\n", "", "wiz", "s"},
-		{"tailscale (tskey-api prefix)", "FOO=tskey-api-abcdef\n", "", "tailscale", "tskey-api-abcdef"},
 		{"render", "RENDER_API_KEY=rnd_x\n", "", "render", "rnd_x"},
 		{"railway", "RAILWAY_TOKEN=rwt\n", "", "railway", "rwt"},
 		{"flyio", "FLY_API_TOKEN=fo1_x\n", "", "flyio", "fo1_x"},
