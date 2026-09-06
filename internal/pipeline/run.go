@@ -27,12 +27,16 @@ type Options struct {
 	Intrusive    bool // permit read-only-but-invasive actions (DB connect, k8s live, harvest)
 	MinFootprint bool // OPSEC: run only the identity call, skip inventory fan-out
 	Correlate    bool // read local hints to correlate SSH keys to candidate hosts
-	Trace        bool // capture masked request/response bodies
-	Endpoint     string
-	Proxy        string // SOCKS5/HTTP proxy URL for HTTP recon egress
-	Timeout      time.Duration
-	Concurrency  int       // max credentials reconned at once on the live path (0 = default)
-	StartedAt    time.Time // run start, stamped on live-validated findings (zero = now)
+	// SpawnStdio permits EXECUTING locally-configured stdio MCP servers to
+	// enumerate their tools. Separate from Intrusive because it runs an argv
+	// read out of a scanned file, which no other geiger operation does.
+	SpawnStdio  bool
+	Trace       bool // capture masked request/response bodies
+	Endpoint    string
+	Proxy       string // SOCKS5/HTTP proxy URL for HTTP recon egress
+	Timeout     time.Duration
+	Concurrency int       // max credentials reconned at once on the live path (0 = default)
+	StartedAt   time.Time // run start, stamped on live-validated findings (zero = now)
 	// Select, when set, scopes the run: only recognized credentials whose module
 	// name passes are reconned (the rest are skipped entirely, not just hidden).
 	// Backs --only/--skip so a second, deeper pass needn't re-exercise everything.
@@ -63,6 +67,10 @@ var nonSecretField = map[string]bool{
 	"account": true, "app_id": true, "sid": true, "domain": true,
 	"server": true, "context": true, "email": true, "client_id": true,
 	"tenant": true, "_rule": true, "identity": true,
+	// The parsed agent surface: server names, commands, and URLs, no secret
+	// values. Registering it as a secret would be inert (it never appears in a
+	// URL) and would hide the destinations the audit trail exists to show.
+	"_surface": true,
 }
 
 // harvestState bounds transitive harvesting and dedupes secrets across the whole
@@ -420,6 +428,7 @@ func runOne(b parse.Blob, reg *module.Registry, opts Options, m recognize.Match)
 	client.SetIntrusive(opts.Intrusive)
 	client.SetMinFootprint(opts.MinFootprint)
 	client.SetCorrelate(opts.Correlate)
+	client.SetSpawnStdio(opts.SpawnStdio)
 	client.SetTrace(opts.Trace)
 	// Seed the scrubber with secret values so none can leak into a recorded URL
 	// or header (e.g. a token carried in the URL path). Skip clearly non-secret

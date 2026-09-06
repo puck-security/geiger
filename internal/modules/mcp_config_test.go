@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -119,4 +120,77 @@ func keysOf(m map[string]recognize.Match) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// The premise of the agentic-reach work: correct credential hygiene does not
+// bound the blast radius. This config carries no secret at all and still wires
+// the agent to the whole filesystem, the corporate wiki, and a way out.
+func TestMCPConfigScoresReachWithoutAnySecret(t *testing.T) {
+	raw := `{"mcpServers":{
+		"fs":   {"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/"]},
+		"wiki": {"command":"uvx","args":["mcp-atlassian"]},
+		"chat": {"command":"npx","args":["-y","@modelcontextprotocol/server-slack"]}}}`
+	b := parse.Parse(raw, "/home/u/.claude/settings.json")
+	got := modulesOf(recognize.Recognize(b, "", module.Default))
+	agg, ok := got["mcp_config"]
+	if !ok {
+		t.Fatal("mcp_config not recognized")
+	}
+	if agg.Fields["secret_count"] != "0" {
+		t.Fatalf("fixture must carry no inline secret, got %q", agg.Fields["secret_count"])
+	}
+
+	mod, _ := module.Default.ByName("mcp_config")
+	fs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, agg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := indexByKey(fs)
+	for _, key := range []string{"corpus-search", "fs-read", "fs-write", "chain: corpus exfiltration", "chain: lethal trifecta"} {
+		f, ok := idx[key]
+		if !ok {
+			t.Errorf("missing finding %q — reach must be reported independently of secrets", key)
+			continue
+		}
+		if f.Flag != module.FlagForceMultiplier {
+			t.Errorf("%s flag = %v, want force multiplier", key, f.Flag)
+		}
+	}
+
+	// Nothing was enumerated, so the reach is geiger's claim about package names.
+	// Reporting a tier from that would be inventing severity.
+	n := mod.Summarize("t", fs)
+	if !n.Undetermined {
+		t.Error("a surface typed only from its config must be Undetermined until enumerated")
+	}
+	if n.Invalid {
+		t.Error("an agent surface is never 'dead'")
+	}
+	// The sentinels must not leak into the printed findings.
+	for _, f := range n.Findings {
+		if strings.HasPrefix(f.Key, "_") {
+			t.Errorf("internal sentinel %q leaked into the note", f.Key)
+		}
+	}
+}
+
+// A settings.json with no MCP servers at all is still an agent surface when it
+// carries hooks: they run shell on lifecycle events with nothing in the path.
+func TestMCPConfigRecognizesHookOnlySurface(t *testing.T) {
+	raw := `{"hooks":{"PreToolUse":[{"hooks":[{"command":"/opt/x.sh"}]}]}}`
+	b := parse.Parse(raw, "/home/u/.claude/settings.json")
+	got := modulesOf(recognize.Recognize(b, "", module.Default))
+	if _, ok := got["mcp_config"]; !ok {
+		t.Fatal("a hooks-only agent settings.json should be recognized")
+	}
+}
+
+// A settings.json that is not an agent config must not be claimed on its name.
+func TestMCPConfigIgnoresUnrelatedJSON(t *testing.T) {
+	for _, f := range []string{"/srv/app/settings.json", "/etc/config.json"} {
+		b := parse.Parse(`{"theme":"dark","fontSize":12}`, f)
+		if _, ok := modulesOf(recognize.Recognize(b, "", module.Default))["mcp_config"]; ok {
+			t.Errorf("%s is not an agent surface", f)
+		}
+	}
 }

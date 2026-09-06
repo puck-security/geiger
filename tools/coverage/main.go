@@ -31,6 +31,7 @@ var groups = []struct {
 		"github_pat", "gitlab", "gitlab_ci_token", "jfrog", "docker_registry", "npm", "pypi", "rubygems",
 	}},
 	{"CI/CD & build", []string{"buildkite", "circleci"}},
+	{"Media & file services", []string{"filestack"}},
 	{"Databases & data platforms", []string{
 		"db_connection_string", "snowflake", "databricks", "mongodb_atlas", "supabase", "planetscale",
 		"neon", "aiven", "upstash", "redis_cloud", "clickhouse_cloud", "clickhouse_selfhosted", "plaid",
@@ -38,7 +39,7 @@ var groups = []struct {
 	{"AI / LLM & agentic", []string{
 		"openai", "anthropic", "claude_code_oauth", "gemini", "azure_openai", "cohere", "mistral",
 		"replicate", "huggingface", "groq", "together", "deepseek", "openrouter", "xai", "fireworks",
-		"perplexity", "elevenlabs", "stability", "pinecone", "mcp_config", "ai_ide_store",
+		"perplexity", "elevenlabs", "stability", "pinecone", "bedrock", "mcp_config", "ai_ide_store",
 	}},
 	{"Secrets managers & vaults", []string{
 		"vault", "conjur", "cyberark_pvwa", "infisical", "akeyless", "delinea_secret_server", "doppler",
@@ -46,7 +47,7 @@ var groups = []struct {
 		"keepass_db", "vault_export_plaintext",
 	}},
 	{"Identity, SSO & directory", []string{
-		"okta", "pingone", "pingfederate", "entra_sp", "jumpcloud", "sailpoint", "auth0", "duo", "workday",
+		"okta", "pingone", "pingfederate", "entra_sp", "jumpcloud", "sailpoint", "auth0", "duo", "workday", "workos",
 	}},
 	{"Endpoint, MDM, RMM & config-mgmt", []string{
 		"ninjaone", "atera", "kandji", "jamf", "mosyle", "automox", "tanium", "ansible_awx",
@@ -59,7 +60,7 @@ var groups = []struct {
 	{"Backup & DR", []string{"veeam", "acronis", "cohesity", "netbackup", "commvault"}},
 	{"ITSM, productivity & support", []string{
 		"servicenow", "jira", "ivanti", "snipeit", "pagerduty", "linear", "asana", "notion", "zendesk", "intercom",
-		"freshservice", "freshdesk", "freshchat", "freshsales",
+		"freshservice", "freshdesk", "freshchat", "freshsales", "atlassian", "confluence",
 	}},
 	{"Comms, email & SMS", []string{
 		"slack", "discord_bot", "telegram_bot", "zoom", "twilio", "vonage", "sendgrid", "mailgun",

@@ -35,12 +35,12 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, gitHistory, verbose, stream, quiet, noReverse, useMetadata, browser, allExts bool
-	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                                       string
-	userAgent, minSeverity, output                                                                                                                       string
-	timeout                                                                                                                                              time.Duration
-	concurrency, minSevRank                                                                                                                              int
-	args                                                                                                                                                 []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, gitHistory, verbose, stream, quiet, noReverse, useMetadata, browser, allExts, spawnStdio bool
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                                                   string
+	userAgent, minSeverity, output                                                                                                                                   string
+	timeout                                                                                                                                                          time.Duration
+	concurrency, minSevRank                                                                                                                                          int
+	args                                                                                                                                                             []string
 }
 
 func main() {
@@ -52,6 +52,7 @@ func main() {
 	flag.BoolVar(&c.minFootprint, "min-footprint", false, "OPSEC: run only the identity (whoami) call per credential, skip inventory fan-out")
 	flag.BoolVar(&c.useEnv, "env", false, "read credentials from the current environment variables")
 	flag.BoolVar(&c.useMetadata, "metadata", false, "harvest cloud instance-metadata credentials (AWS/GCP/Azure/k8s/…) and triage them (requires --live)")
+	flag.BoolVar(&c.spawnStdio, "spawn-stdio", false, "enumerate local stdio MCP servers by RUNNING each configured command (requires --live; executes third-party code from the scanned config)")
 	flag.BoolVar(&c.browser, "browser", false, "model malicious-browser-extension impact: score installed Chrome/Edge extensions' permissions and (with --live --intrusive) inventory the live sessions they'd reach")
 	flag.BoolVar(&c.allExts, "all", false, "with --browser, list every extension (incl. narrow/benign ones) instead of collapsing them into a count")
 	flag.StringVar(&c.endpoint, "endpoint", "", "tenant/instance/host for set-shaped credentials")
@@ -174,12 +175,22 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 		} else if c.intrusive {
 			fmt.Fprintln(stderr, "geiger: --intrusive enabled — will connect to databases and cluster APIs (read-only).")
 		}
+		// This is the one geiger mode that RUNS third-party code, so it says so
+		// every time rather than only in --help.
+		if c.spawnStdio && c.live {
+			fmt.Fprintln(stderr, "geiger: --spawn-stdio enabled — will EXECUTE each configured stdio MCP server command to enumerate its tools.")
+		}
+	}
+	// A gate that silently does nothing is worse than one that explains itself.
+	if c.spawnStdio && !c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --spawn-stdio requires --live; stdio servers will be typed from their config only.")
 	}
 
 	opts := pipeline.Options{
 		Live: c.live, Intrusive: c.intrusive, MinFootprint: c.minFootprint,
 		Endpoint: c.endpoint, Proxy: c.proxy, Correlate: c.correlate, Trace: c.trace,
-		Timeout: c.timeout, Concurrency: c.concurrency, StartedAt: time.Now(),
+		SpawnStdio: c.spawnStdio,
+		Timeout:    c.timeout, Concurrency: c.concurrency, StartedAt: time.Now(),
 		Select: c.selector(),
 	}
 
@@ -717,6 +728,7 @@ func usage() {
   geiger ./leaked-repo            # walk a directory
   geiger a.env b.env services/    # multiple files/dirs at once
   geiger --live --intrusive --only databases ./repo   # deepen just DB creds
+  geiger ~/.claude.json           # what an agent's tool chain reaches
   geiger --from-gitleaks report.json
   nuclei -t exposures/ -l targets.txt -j -irr | geiger --from-nuclei - --live
   aws configure export-credentials | geiger
@@ -731,6 +743,8 @@ flags:
   --browser           model malicious-extension impact: score Chrome/Edge extensions;
                       with --live --intrusive, inventory the live sessions they'd reach
   --all               with --browser, list every extension (not just the risky ones)
+  --spawn-stdio       enumerate local stdio MCP servers by RUNNING each configured
+                      command (needs --live; executes code from the scanned config)
   --endpoint URL      tenant/instance/host for set-shaped credentials
   --proxy URL         route HTTP recon through a proxy (http/https/socks5)
   --timeout DUR       per-credential recon timeout (default 15s)

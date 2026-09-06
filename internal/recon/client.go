@@ -95,6 +95,7 @@ type Client struct {
 	intrusive    bool
 	minFootprint bool
 	correlate    bool
+	spawnStdio   bool
 	trace        bool
 	planned      []PlannedCall
 	secrets      []secretRepl // known secrets and what to display them as
@@ -162,6 +163,17 @@ func (c *Client) SetMinFootprint(v bool) { c.minFootprint = v }
 
 // MinFootprint reports whether modules should minimize their call count.
 func (c *Client) MinFootprint() bool { return c.minFootprint }
+
+// SetSpawnStdio permits EXECUTING a locally-configured stdio MCP server in
+// order to enumerate its tools. This is deliberately not folded into
+// --intrusive: that flag permits connecting to services and leaving a trail,
+// whereas this runs an argv that came out of a scanned file. Off by default;
+// the CLI turns it on with --spawn-stdio.
+func (c *Client) SetSpawnStdio(v bool) { c.spawnStdio = v }
+
+// SpawnStdio reports whether running local stdio servers is permitted. A caller
+// must check this AND Live before starting any process.
+func (c *Client) SpawnStdio() bool { return c.spawnStdio }
 
 // SetCorrelate enables reading bounded local hints (SSH config/known_hosts/
 // shell history) to correlate keys to candidate hosts.
