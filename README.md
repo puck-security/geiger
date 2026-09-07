@@ -8,7 +8,7 @@
 [![license: MIT](https://img.shields.io/github/license/puck-security/geiger?color=3ddc84)](LICENSE)
 [![release](https://img.shields.io/github/v/release/puck-security/geiger?color=3ddc84)](../../releases)
 [![ci](https://img.shields.io/github/actions/workflow/status/puck-security/geiger/ci.yml?branch=main&label=ci)](../../actions/workflows/ci.yml)
-![go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8.svg)
+![go 1.26+](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)
 ![recon: read-only](https://img.shields.io/badge/recon-read--only-3ddc84.svg)
 
 <img src="assets/geiger-demo.svg" width="660"
@@ -34,7 +34,7 @@ Triage: an incident responder's *"how bad is this?"* and a pentester's
 tar xzf geiger_*_linux_amd64.tar.gz && sudo mv geiger /usr/local/bin/
 ```
 
-**Source** (Go 1.25+):
+**Source** (Go 1.26+):
 
 ```sh
 git clone https://github.com/puck-security/geiger && cd geiger
