@@ -31,10 +31,19 @@ import (
 // Findings renders the surface as note findings, worst first.
 func (s Surface) Findings() []module.Finding {
 	var out []module.Finding
-
 	out = append(out, s.inventoryFinding())
+
+	// Nothing about the servers' reach could be established. The capability,
+	// chain and per-server lines are all empty in that case, and four lines
+	// saying so in different words are worse than one, so stop here — the
+	// census line names the servers and the note's undetermined reason says
+	// what would change it. The approval posture still gets reported: prompts
+	// being off is a fact about the file, not about what the servers reach.
 	if f, ok := s.postureFinding(); ok {
 		out = append(out, f)
+	}
+	if s.Untypeable() {
+		return append(out, s.hookFindings()...)
 	}
 	out = append(out, s.capabilityFindings()...)
 	out = append(out, s.chainFindings()...)
@@ -44,14 +53,22 @@ func (s Surface) Findings() []module.Finding {
 	return out
 }
 
-// evidenceFindings say how the reach above was established: typed from the
-// config, or reported by the servers themselves.
+// Untypeable reports that servers are configured but nothing is known about
+// what any of them exposes.
+func (s Surface) Untypeable() bool {
+	return len(s.Servers) > 0 && s.Caps().Set().Empty()
+}
+
+// evidenceFindings say how the reach above was established: read from the
+// config, or reported by the servers themselves. Only a flag that is not
+// already in use is named — telling someone to pass --live when they just did
+// reads like the tool did not notice.
 func (s Surface) evidenceFindings() []module.Finding {
 	if len(s.Servers) == 0 {
 		return nil
 	}
-	enumerated, total := 0, len(s.Servers)
-	stdio := 0
+	enumerated, stdio := 0, 0
+	total := len(s.Servers)
 	for _, srv := range s.Servers {
 		if srv.Enumerated {
 			enumerated++
@@ -62,19 +79,33 @@ func (s Surface) evidenceFindings() []module.Finding {
 	if enumerated == total {
 		return []module.Finding{{
 			Key:   "evidence",
-			Value: fmt.Sprintf("observed: all %d server(s) reported their own tool list", total),
+			Value: fmt.Sprintf("observed: all %s reported their own tool list", plural(total, "server")),
 			Flag:  module.FlagNone,
 		}}
 	}
-	v := fmt.Sprintf("read from the config for %d of %d server(s) — what these packages are known to do, "+
-		"not what this install was seen doing. Use --live to ask each server", total-enumerated, total)
-	if stdio > 0 {
-		v += fmt.Sprintf("; %d are local and also need --spawn-stdio, which runs the configured command", stdio)
+	v := fmt.Sprintf("read from the config for %d of %d servers — what these packages are known to do, "+
+		"not what this install was seen doing", total-enumerated, total)
+	switch {
+	case !s.Live:
+		v += ". --live asks each server directly"
+	case stdio > 0 && !s.SpawnStdio:
+		v += fmt.Sprintf(". %d are local; --spawn-stdio runs each configured command to ask it", stdio)
 	}
 	return []module.Finding{{Key: "evidence", Value: v, Flag: module.FlagNone}}
 }
 
-// inventoryFinding is the always-present census line.
+// plural renders "1 server" / "3 servers".
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// inventoryFinding is the always-present census line. When nothing about the
+// servers could be typed it also names them, because the name and the command
+// are then the only facts there are and they are what the reader goes and looks
+// up.
 func (s Surface) inventoryFinding() module.Finding {
 	stdio, remote := 0, 0
 	for _, srv := range s.Servers {
@@ -84,9 +115,42 @@ func (s Surface) inventoryFinding() module.Finding {
 			stdio++
 		}
 	}
-	v := fmt.Sprintf("%d MCP server(s) wired to %s: %d local, %d remote",
-		len(s.Servers), s.Runtime, stdio, remote)
-	return module.Finding{Key: "tool chain", Value: v, Flag: module.FlagInfo}
+	v := fmt.Sprintf("%s wired to %s: %d local, %d remote",
+		plural(len(s.Servers), "MCP server"), s.Runtime, stdio, remote)
+	f := module.Finding{Key: "tool chain", Value: v, Flag: module.FlagInfo}
+	if s.Untypeable() {
+		names, detail := serverNamesAndLaunch(s)
+		f.Value = fmt.Sprintf("%s wired to %s (%s): %d local, %d remote",
+			plural(len(s.Servers), "MCP server"), s.Runtime, names, stdio, remote)
+		f.Detail = detail
+	}
+	return f
+}
+
+// serverNamesAndLaunch renders the server names for a one-line summary, capped
+// so a laptop with a dozen servers does not produce an unreadable line, plus the
+// full name-and-launch list for the detail.
+func serverNamesAndLaunch(s Surface) (string, []string) {
+	names := make([]string, 0, len(s.Servers))
+	detail := make([]string, 0, len(s.Servers))
+	for _, srv := range s.Servers {
+		names = append(names, srv.Name)
+		switch {
+		case srv.URL != "":
+			detail = append(detail, srv.Name+": "+srv.URL)
+		case srv.Command != "":
+			detail = append(detail, srv.Name+": "+strings.TrimSpace(srv.Command+" "+strings.Join(srv.Args, " ")))
+		default:
+			detail = append(detail, srv.Name+": no command or url in the config")
+		}
+	}
+	sort.Strings(names)
+	sort.Strings(detail)
+	const cap = 4
+	if len(names) > cap {
+		return fmt.Sprintf("%s and %d more", strings.Join(names[:cap], ", "), len(names)-cap), detail
+	}
+	return strings.Join(names, ", "), detail
 }
 
 // postureFinding reports whether a human approves tool calls. This is not a
@@ -213,7 +277,7 @@ func (s Surface) serverFindings() []module.Finding {
 		sort.Strings(benign)
 		out = append(out, module.Finding{
 			Key:    "narrow servers",
-			Value:  fmt.Sprintf("%d server(s) with no identified reach", len(benign)),
+			Value:  plural(len(benign), "server") + " with no identified reach",
 			Flag:   module.FlagNone,
 			Detail: benign,
 		})
@@ -347,9 +411,12 @@ func (s Surface) Summary() string {
 			break
 		}
 	}
-	sum := fmt.Sprintf("%s agent surface — %d server(s)", s.Runtime, len(s.Servers))
-	if worst != "" {
+	sum := fmt.Sprintf("%s agent surface — %s", s.Runtime, plural(len(s.Servers), "server"))
+	switch {
+	case worst != "":
 		sum += ", reaches " + worst
+	case s.Untypeable():
+		sum += ", reach unknown"
 	}
 	if s.AutoApproved() {
 		sum += ", auto-approved"

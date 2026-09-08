@@ -287,7 +287,7 @@ func (m mcpConfig) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 	out = append(out, module.Finding{Key: summaryKey, Value: surface.Summary()})
 	// Undetermined only when nothing about the servers' reach could be
 	// established. A config that types cleanly is scored; see Surface.Summarize.
-	if len(surface.Servers) > 0 && surface.Caps().Set().Empty() {
+	if surface.Untypeable() {
 		out = append(out, module.Finding{Key: undeterminedKey, Value: undeterminedReason(c)})
 	}
 	return out, nil
@@ -298,6 +298,7 @@ func (m mcpConfig) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 // operator has separately opted in, because running them executes an argv that
 // came out of the scanned file.
 func enumerate(ctx context.Context, c *recon.Client, s *agent.Surface) {
+	s.Live, s.SpawnStdio = c.Live(), c.SpawnStdio()
 	for i := range s.Servers {
 		srv := &s.Servers[i]
 		switch srv.Transport {
@@ -319,14 +320,13 @@ func enumerate(ctx context.Context, c *recon.Client, s *agent.Surface) {
 // undeterminedReason explains what would establish the reach, naming the flag
 // that is actually missing rather than listing both every time.
 func undeterminedReason(c *recon.Client) string {
-	base := "servers are configured but none could be typed: no catalog entry and no recognizable arguments. Re-run with "
 	switch {
 	case !c.Live():
-		return base + "--live to ask each server what it exposes"
+		return "no catalog entry and nothing in the arguments. --live asks each server what it exposes"
 	case !c.SpawnStdio():
-		return base + "--spawn-stdio to enumerate local stdio servers (this RUNS each configured command)"
+		return "no catalog entry and nothing in the arguments. --spawn-stdio would run each configured command and ask it"
 	}
-	return base + "--live to ask each server what it exposes"
+	return "no catalog entry, nothing in the arguments, and no server answered"
 }
 
 // inlineSecretFindings report the aggregator axis: credentials sitting in the
@@ -336,7 +336,7 @@ func inlineSecretFindings(f module.Fields) []module.Finding {
 	if n == "" || n == "0" {
 		return []module.Finding{{
 			Key:   "inline secrets",
-			Value: "no inline credentials — the servers authenticate via OS env, a keychain, or OAuth. This does NOT bound the reach above.",
+			Value: "none in this file — the servers authenticate elsewhere. That does not bound the reach above.",
 			Flag:  module.FlagInfo,
 		}}
 	}

@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -71,5 +72,76 @@ func TestGenericSecretSuppressedWhenClaimed(t *testing.T) {
 func TestPrefixHintNamesGoogleClientSecret(t *testing.T) {
 	if h := prefixHint("GOCSPX-MjlfId78mAbCdEfGhIjKlMnOp"); h == "" {
 		t.Fatal("GOCSPX- should be named as a Google OAuth client secret")
+	}
+}
+
+// ~/.claude.json is the worst case for name-based matching: an object called
+// oauthAccount, project keys that are filesystem paths, and a pile of UUIDs,
+// timestamps and enum strings sitting beside one real bearer token. Matching
+// the flattened path meant reporting eleven identifiers and missing nothing
+// useful.
+func TestGenericSecretIgnoresClaudeConfigMetadata(t *testing.T) {
+	raw := `{
+	  "claudeCodeFirstTokenDate": "2026-01-04T11:22:33.714Z",
+	  "oauthAccount": {
+	    "accountUuid": "1f0c9a3e-2b7d-4c11-9f2a-0a1b2c3dd685",
+	    "emailAddress": "someone@example.com",
+	    "accountCreatedAt": "2025-11-02T08:09:10.933Z",
+	    "organizationRateLimitTier": "default_claude_max_20x",
+	    "billingType": "stripe_subscription",
+	    "organizationType": "claude_max"
+	  },
+	  "projects": {
+	    "/home/u/code/bad-password-generator": {
+	      "lastSessionId": "7b2c3d4e-5f60-4718-9a2b-3c4d5e6fcb13"
+	    },
+	    "/home/u/code/app": {
+	      "mcpServers": {
+	        "lab": {"url": "https://lab.example.com/mcp",
+	                "headers": {"Authorization": "Bearer sk-lab-abc123def456"}}
+	      }
+	    }
+	  }
+	}`
+	ms := recognizeGenericSecret(parse.Parse(raw, ".claude.json"), "", nil)
+	if len(ms) != 1 {
+		var got []string
+		for _, m := range ms {
+			got = append(got, m.Label)
+		}
+		t.Fatalf("expected only the bearer token, got %d: %v", len(ms), got)
+	}
+	if !strings.HasSuffix(ms[0].Label, "Authorization") {
+		t.Errorf("the surviving match should be the header, got %q", ms[0].Label)
+	}
+}
+
+// A parent object whose own name is a secret container still marks its children,
+// because that is how a credential map is written.
+func TestGenericSecretHonoursSecretContainers(t *testing.T) {
+	if !nameLooksSecret("secrets.stripe") {
+		t.Error("secrets.stripe should be a credential")
+	}
+	if nameLooksSecret("oauthAccount.emailAddress") {
+		t.Error("a field under oauthAccount is not a credential just because the parent contains 'auth'")
+	}
+	if nameLooksSecret("projects./home/u/bad-password-generator.lastSessionId") {
+		t.Error("a directory name must not make every setting under it a credential")
+	}
+	if !nameLooksSecret("mcpServers.x.headers.Authorization") {
+		t.Error("the leaf key is what decides, and Authorization is one")
+	}
+}
+
+func TestValueLooksSecretRejectsIdentifiers(t *testing.T) {
+	for _, v := range []string{
+		"1f0c9a3e-2b7d-4c11-9f2a-0a1b2c3dd685",
+		"2026-01-04T11:22:33.714Z",
+		"2026-01-04",
+		"someone@example.com",
+	} {
+		if valueLooksSecret(v) {
+			t.Errorf("valueLooksSecret(%q) = true — an identifier, not a credential", v)
+		}
 	}
 }

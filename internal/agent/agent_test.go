@@ -384,8 +384,19 @@ func TestConfigTypedSurfaceIsScored(t *testing.T) {
 	if !strings.Contains(e.Value, "read from the config") || !strings.Contains(e.Value, "--live") {
 		t.Errorf("evidence should name the source and the way to confirm it: %q", e.Value)
 	}
+	if strings.Contains(e.Value, "--spawn-stdio") {
+		t.Errorf("--live has not been passed yet, so that is the flag to name first: %q", e.Value)
+	}
+
+	// Once --live has run, --spawn-stdio is the flag that is still missing.
+	live := s
+	live.Live = true
+	e, ok = findingFor(live.Findings(), "evidence")
+	if !ok {
+		t.Fatal("a config-typed surface must state how its reach was established")
+	}
 	if !strings.Contains(e.Value, "--spawn-stdio") {
-		t.Errorf("stdio servers need the second flag named too: %q", e.Value)
+		t.Errorf("with --live already passed, local servers need the second flag named: %q", e.Value)
 	}
 }
 
@@ -617,5 +628,72 @@ func TestCapsMergeKeepsBroaderScope(t *testing.T) {
 	}
 	if !cs[0].Broad || cs[0].Scope != "/" {
 		t.Errorf("the broader scope must win: %+v", cs[0])
+	}
+}
+
+// ~/.claude.json keeps a global server map and one more for every directory the
+// user has opened. In practice that is where the servers are, so reading only
+// the global map reports an almost empty surface for a working laptop.
+func TestPerProjectServerMaps(t *testing.T) {
+	s := parse(t, "/home/u/.claude.json", `{
+		"mcpServers": {"global": {"command": "uvx", "args": ["mcp-server-shell"]}},
+		"projects": {
+			"/home/u/code/app": {"mcpServers": {
+				"lab": {"url": "https://lab.example.com/mcp"}}},
+			"/home/u/code/other": {"mcpServers": {
+				"lab": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-slack"]}}},
+			"/home/u/code/empty": {"lastSessionId": "x"}
+		}}`)
+	if len(s.Servers) != 3 {
+		var got []string
+		for _, srv := range s.Servers {
+			got = append(got, srv.Name)
+		}
+		t.Fatalf("expected the global server and both projects', got %v", got)
+	}
+	// Two projects can each have a server called "lab"; the project name keeps
+	// them apart and says which one a finding is about.
+	if serverNamed(t, s, "app/lab").Transport != TransportHTTP {
+		t.Error("the project's remote server should be typed as remote")
+	}
+	if !serverNamed(t, s, "other/lab").Caps.Set().Has(CapCorpusSearch) {
+		t.Error("a project server must be typed like any other")
+	}
+}
+
+// A surface whose servers type to nothing said the same thing on four lines.
+// The census line names them, the note's reason says what would change it, and
+// nothing else is worth printing.
+func TestUntypeableSurfaceReportsCompactly(t *testing.T) {
+	s := parse(t, "/home/u/.claude.json", `{"mcpServers":{"mystery":{"command":"./some-unknown-binary"}}}`)
+	if !s.Untypeable() {
+		t.Fatal("fixture should type to nothing")
+	}
+	fs := s.Findings()
+	if len(fs) != 1 {
+		t.Fatalf("expected one line, got %d: %+v", len(fs), fs)
+	}
+	if !strings.Contains(fs[0].Value, "mystery") {
+		t.Errorf("the census line must name the server it could not type: %q", fs[0].Value)
+	}
+	if len(fs[0].Detail) != 1 || !strings.Contains(fs[0].Detail[0], "./some-unknown-binary") {
+		t.Errorf("the launch command belongs in the detail: %v", fs[0].Detail)
+	}
+	if !strings.Contains(s.Summary(), "reach unknown") {
+		t.Errorf("summary should say the reach is unknown: %q", s.Summary())
+	}
+}
+
+// Prompts being off is a fact about the file, not about what the servers reach,
+// so it is still reported when nothing could be typed.
+func TestApprovalIsReportedEvenWhenNothingTypes(t *testing.T) {
+	s := parse(t, "/home/u/.claude/settings.json", `{
+		"permissions": {"defaultMode": "bypassPermissions"},
+		"mcpServers": {"mystery": {"command": "./some-unknown-binary"}}}`)
+	if !s.Untypeable() {
+		t.Fatal("fixture should type to nothing")
+	}
+	if _, ok := findingFor(s.Findings(), "approval"); !ok {
+		t.Error("no approval finding on an untypeable surface")
 	}
 }

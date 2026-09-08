@@ -37,6 +37,11 @@ type Surface struct {
 	// Skills and Subagents are instruction sets the agent loads and follows.
 	Skills    []string
 	Subagents []string
+
+	// Live and SpawnStdio record which enumeration the run was allowed to do,
+	// so the evidence line names a flag the reader has not already passed.
+	Live       bool
+	SpawnStdio bool
 }
 
 // Hook is one lifecycle shell command.
@@ -145,10 +150,25 @@ func ServerMaps(root map[string]any) map[string]any {
 	if root == nil {
 		return nil
 	}
+	out, found := map[string]any{}, false
+	merge := func(m map[string]any, prefix string) {
+		found = true
+		for k, v := range m {
+			if _, ok := v.(map[string]any); !ok {
+				continue
+			}
+			if prefix != "" {
+				k = prefix + "/" + k
+			}
+			out[k] = v
+		}
+	}
+
 	// Flat, top-level keys used by most clients.
 	for _, k := range []string{"mcpServers", "servers", "mcp_servers", "context_servers"} {
 		if m, ok := root[k].(map[string]any); ok {
-			return m
+			merge(m, "")
+			break
 		}
 	}
 	// Nested: VS Code settings.json (mcp.servers), Continue (experimental).
@@ -156,12 +176,45 @@ func ServerMaps(root map[string]any) map[string]any {
 		if outer, ok := root[k].(map[string]any); ok {
 			for _, ik := range []string{"servers", "mcpServers"} {
 				if m, ok := outer[ik].(map[string]any); ok {
-					return m
+					merge(m, "")
 				}
 			}
 		}
 	}
-	return nil
+	// Per-project maps. ~/.claude.json keeps a global mcpServers map and one
+	// more for every directory the user has opened, under projects.<dir>. In
+	// practice that is where the servers are, so reading only the global map
+	// reports an almost empty surface for a working laptop. Entries are keyed
+	// "<dir>/<name>" to keep two projects' servers apart and to say in the
+	// finding which project each came from.
+	if projects, ok := root["projects"].(map[string]any); ok {
+		for dir, v := range projects {
+			pm, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, k := range []string{"mcpServers", "servers"} {
+				if m, ok := pm[k].(map[string]any); ok {
+					merge(m, lastPathSegment(dir))
+				}
+			}
+		}
+	}
+
+	if !found {
+		return nil
+	}
+	return out
+}
+
+// lastPathSegment names a directory from an absolute path written by whichever
+// OS produced the config, so it cannot use filepath's host separator.
+func lastPathSegment(p string) string {
+	p = strings.TrimRight(p, `/\`)
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
 
 // ParseSurface builds a Surface from a decoded agent config. It is layout-aware

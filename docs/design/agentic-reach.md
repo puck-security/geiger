@@ -302,6 +302,12 @@ agent surface is there. Runtime layouts covered: Claude Code and Claude Desktop,
 Cursor, VS Code, Windsurf, Cline/Roo/Kilo, Continue, Gemini CLI, Zed, Codex
 (TOML), Goose (YAML).
 
+`~/.claude.json` needs one extra step. It keeps a global `mcpServers` map and one
+more for every directory the user has opened, under `projects.<dir>.mcpServers`,
+and in practice that is where the servers are. Those maps are merged in, keyed
+`<dir>/<name>` so two projects' servers stay apart and a finding says which
+project it is about.
+
 Non-MCP tool surface is inventoried alongside, because it is the same reach by a
 different road:
 
