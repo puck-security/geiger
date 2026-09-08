@@ -285,7 +285,9 @@ func (m mcpConfig) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 	out := surface.Findings()
 	out = append(out, inlineSecretFindings(f)...)
 	out = append(out, module.Finding{Key: summaryKey, Value: surface.Summary()})
-	if !surface.Enumerated() && len(surface.Servers) > 0 {
+	// Undetermined only when nothing about the servers' reach could be
+	// established. A config that types cleanly is scored; see Surface.Summarize.
+	if len(surface.Servers) > 0 && surface.Caps().Set().Empty() {
 		out = append(out, module.Finding{Key: undeterminedKey, Value: undeterminedReason(c)})
 	}
 	return out, nil
@@ -314,17 +316,17 @@ func enumerate(ctx context.Context, c *recon.Client, s *agent.Surface) {
 	}
 }
 
-// undeterminedReason explains what would confirm the inferred reach, naming the
-// flag that is actually missing rather than listing both every time.
+// undeterminedReason explains what would establish the reach, naming the flag
+// that is actually missing rather than listing both every time.
 func undeterminedReason(c *recon.Client) string {
-	base := "reach inferred from server identity and arguments; no tool list observed — re-run with "
+	base := "servers are configured but none could be typed: no catalog entry and no recognizable arguments. Re-run with "
 	switch {
 	case !c.Live():
-		return base + "--live to confirm it against what each server actually exposes"
+		return base + "--live to ask each server what it exposes"
 	case !c.SpawnStdio():
 		return base + "--spawn-stdio to enumerate local stdio servers (this RUNS each configured command)"
 	}
-	return base + "--live to confirm it against what each server actually exposes"
+	return base + "--live to ask each server what it exposes"
 }
 
 // inlineSecretFindings report the aggregator axis: credentials sitting in the

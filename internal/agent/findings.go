@@ -33,7 +33,40 @@ func (s Surface) Findings() []module.Finding {
 	out = append(out, s.chainFindings()...)
 	out = append(out, s.serverFindings()...)
 	out = append(out, s.hookFindings()...)
+	out = append(out, s.evidenceFindings()...)
 	return out
+}
+
+// evidenceFindings say how the reach above was established. The tier no longer
+// encodes that, so the note states it plainly: a config-typed surface is scored
+// on what its servers are known to do, and --live replaces that with what they
+// report doing.
+func (s Surface) evidenceFindings() []module.Finding {
+	if len(s.Servers) == 0 {
+		return nil
+	}
+	enumerated, total := 0, len(s.Servers)
+	stdio := 0
+	for _, srv := range s.Servers {
+		if srv.Enumerated {
+			enumerated++
+		} else if srv.Transport == TransportStdio {
+			stdio++
+		}
+	}
+	if enumerated == total {
+		return []module.Finding{{
+			Key:   "evidence",
+			Value: fmt.Sprintf("reach observed: all %d server(s) reported their own tool list", total),
+			Flag:  module.FlagInfo,
+		}}
+	}
+	v := fmt.Sprintf("reach typed from the config for %d of %d server(s) — what these servers are known to do, "+
+		"not what this deployment was seen doing. Re-run with --live to ask each one", total-enumerated, total)
+	if stdio > 0 {
+		v += fmt.Sprintf("; %d are stdio and also need --spawn-stdio, which runs the configured command", stdio)
+	}
+	return []module.Finding{{Key: "evidence", Value: v, Flag: module.FlagInfo}}
 }
 
 // inventoryFinding is the always-present census line.
@@ -251,19 +284,31 @@ func (s Surface) hookFindings() []module.Finding {
 	return out
 }
 
-// Summarize builds the note. It is the single place the Undetermined rule is
-// applied, so no caller can accidentally promote an unconfirmed claim.
+// Summarize builds the note, and is the single place the Undetermined rule is
+// applied.
+//
+// A config is not a credential. For a credential, Undetermined means geiger
+// could not establish the thing is even live, so scoring it would invent a
+// severity. Here the config file IS the observation: "server-filesystem /" in
+// the arguments is read off disk, and what it grants is not in doubt. Only the
+// exact tool list is, and that changes precision, not the reach class. geiger's
+// standing rule is likely impact, not perfect impact.
+//
+// Withholding a tier until enumeration would also make the common case useless.
+// Most servers are stdio, and enumerating those needs --spawn-stdio, which runs
+// third-party code and often cannot be run at all — so the default mode, the one
+// people actually use, would never report anything.
+//
+// Undetermined is therefore kept for the case it was meant for: servers are
+// configured but nothing about their reach could be established.
 func (s Surface) Summarize(title string) module.Note {
 	fs := s.Findings()
 	n := module.Note{Title: title, Findings: fs, Summary: s.Summary()}
-	if !s.Enumerated() && len(s.Servers) > 0 {
-		// Nothing here was disproved and nothing was observed: the reach above is
-		// what these packages are known to do, not what this deployment was seen
-		// doing. UNKNOWN with the claim visible is the honest answer; --live
-		// promotes it.
+	if len(s.Servers) > 0 && s.Caps().Set().Empty() {
 		n.Undetermined = true
-		n.Reason = "reach inferred from server identity and arguments; no tool list observed — " +
-			"re-run with --live (and --spawn-stdio for local servers) to confirm against what each server actually exposes"
+		n.Reason = "servers are configured but none could be typed: no catalog entry, no recognizable " +
+			"arguments, and no tool list observed. Re-run with --live (and --spawn-stdio for local servers) " +
+			"to ask each server what it exposes"
 	}
 	return n
 }

@@ -157,14 +157,19 @@ func TestMCPConfigScoresReachWithoutAnySecret(t *testing.T) {
 		}
 	}
 
-	// Nothing was enumerated, so the reach is geiger's claim about package names.
-	// Reporting a tier from that would be inventing severity.
+	// The config types cleanly, so it is scored rather than withheld. The note
+	// still has to say the reach came from the config and not from enumeration.
 	n := mod.Summarize("t", fs)
-	if !n.Undetermined {
-		t.Error("a surface typed only from its config must be Undetermined until enumerated")
+	if n.Undetermined {
+		t.Error("a surface typed from its config must be scored, not left Undetermined")
 	}
 	if n.Invalid {
 		t.Error("an agent surface is never 'dead'")
+	}
+	if e, ok := findingFor(n.Findings, "evidence"); !ok {
+		t.Error("the note must state how the reach was established")
+	} else if !strings.Contains(e.Value, "typed from the config") {
+		t.Errorf("evidence should name the config as the source: %q", e.Value)
 	}
 	// The sentinels must not leak into the printed findings.
 	for _, f := range n.Findings {
@@ -192,5 +197,37 @@ func TestMCPConfigIgnoresUnrelatedJSON(t *testing.T) {
 		if _, ok := modulesOf(recognize.Recognize(b, "", module.Default))["mcp_config"]; ok {
 			t.Errorf("%s is not an agent surface", f)
 		}
+	}
+}
+
+func findingFor(fs []module.Finding, key string) (module.Finding, bool) {
+	for _, f := range fs {
+		if f.Key == key {
+			return f, true
+		}
+	}
+	return module.Finding{}, false
+}
+
+// A config geiger cannot type at all is the case Undetermined exists for.
+func TestMCPConfigUntypeableSurfaceIsUndetermined(t *testing.T) {
+	b := parse.Parse(`{"mcpServers":{"mystery":{"command":"./unknown-binary"}}}`, "mcp.json")
+	var agg recognize.Match
+	for _, m := range recognize.Recognize(b, "", module.Default) {
+		if m.Module == "mcp_config" {
+			agg = m
+		}
+	}
+	mod, _ := module.Default.ByName("mcp_config")
+	fs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, agg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := mod.Summarize("t", fs)
+	if !n.Undetermined {
+		t.Error("a server with no identifiable reach must leave the note Undetermined")
+	}
+	if n.Reason == "" {
+		t.Error("an Undetermined note must say why")
 	}
 }

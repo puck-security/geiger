@@ -299,28 +299,64 @@ func TestRemoteTransportDetection(t *testing.T) {
 	}
 }
 
-// Enumeration is what promotes a claim into an observation. Until it happens the
-// surface must stay Undetermined, or geiger invents a severity from its own guess.
-func TestUndeterminedUntilEnumerated(t *testing.T) {
+// A config that types cleanly is scored on what it says. The config file is the
+// observation; withholding a tier until enumeration would leave the default mode,
+// which is the one most people run, reporting nothing.
+func TestConfigTypedSurfaceIsScored(t *testing.T) {
 	s := parse(t, "mcp.json", noSecretsFixture)
 	if s.Enumerated() {
 		t.Fatal("nothing has been enumerated yet")
 	}
 	n := s.Summarize("t")
+	if n.Undetermined {
+		t.Error("a surface typed from its config must be scored, not left Undetermined")
+	}
+	if _, ok := findingFor(n.Findings, "corpus-search"); !ok {
+		t.Error("the typed reach must be reported")
+	}
+	// The reader still has to be told the reach came from the config, since the
+	// tier no longer encodes that.
+	e, ok := findingFor(n.Findings, "evidence")
+	if !ok {
+		t.Fatal("a config-typed surface must state how its reach was established")
+	}
+	if !strings.Contains(e.Value, "typed from the config") || !strings.Contains(e.Value, "--live") {
+		t.Errorf("evidence should name the source and the way to confirm it: %q", e.Value)
+	}
+	if !strings.Contains(e.Value, "--spawn-stdio") {
+		t.Errorf("stdio servers need the second flag named too: %q", e.Value)
+	}
+}
+
+// Undetermined is kept for what it was meant for: servers are configured, but
+// nothing about their reach could be established.
+func TestUntypeableSurfaceIsUndetermined(t *testing.T) {
+	s := parse(t, "mcp.json", `{"mcpServers":{"mystery":{"command":"./some-unknown-binary"}}}`)
+	if len(s.Servers) != 1 {
+		t.Fatalf("expected one server, got %d", len(s.Servers))
+	}
+	if !s.Caps().Set().Empty() {
+		t.Fatalf("fixture should type to nothing, got %v", s.Caps().Summary())
+	}
+	n := s.Summarize("t")
 	if !n.Undetermined {
-		t.Error("a surface typed only from package names must be Undetermined")
+		t.Error("a surface with no identifiable reach must be Undetermined")
 	}
 	if n.Reason == "" {
 		t.Error("an Undetermined note must say why")
 	}
-	// The claim itself still has to be visible — the reader needs the stakes.
-	if _, ok := findingFor(n.Findings, "corpus-search"); !ok {
-		t.Error("the inferred reach must still be reported on an Undetermined note")
-	}
+}
 
+// Once every server has reported its own tool list, the note says so.
+func TestEnumeratedSurfaceReportsObservedEvidence(t *testing.T) {
+	s := parse(t, "mcp.json", `{"mcpServers":{"sh":{"command":"uvx","args":["mcp-server-shell"]}}}`)
 	s.Servers[0].Enumerated = true
-	if s.Summarize("t").Undetermined {
-		t.Error("an enumerated surface must not stay Undetermined")
+	e, ok := findingFor(s.Summarize("t").Findings, "evidence")
+	if !ok {
+		t.Fatal("no evidence finding")
+	}
+	if !strings.Contains(e.Value, "observed") {
+		t.Errorf("a fully enumerated surface should report observed reach: %q", e.Value)
 	}
 }
 

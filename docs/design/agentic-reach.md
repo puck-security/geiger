@@ -116,8 +116,9 @@ server without executing anything:
     inherits that credential's blast radius, which geiger already computes
   - a DSN in `args` → routed to the existing `db_connection_string` module
 
-Static typing is an **assertion about a package name**, not an observation. See
-§5.
+Static typing reads the config, which is itself an observation: the arguments
+say what the agent is wired to. What it cannot show is the exact tool list. See
+§5 for how that difference is scored.
 
 ---
 
@@ -203,22 +204,39 @@ Force-multiplier findings on the surface note. Each is a property of the tool
 
 ## 5. Scoring discipline
 
-`score.TierFor` is explicit that a force multiplier must **not** floor an
-`Undetermined` note at HIGH, because on an undetermined note the capability is
-geiger's own claim about what a credential *would* reach — "invented severity in
-a different costume."
+A config is not a credential, and the difference decides how it is scored.
 
-Typing a server from its package name is exactly that kind of claim. So:
+For a credential, `Undetermined` means geiger could not establish the thing is
+even live, so putting a tier on it would invent a severity. `score.TierFor`
+enforces that: a force multiplier does not floor an `Undetermined` note at HIGH.
 
-- **static typing only** → `Undetermined: true` → the note reads **UNKNOWN**,
-  with the capability claim fully visible in the findings and `Reason` explaining
-  that no tool list was observed.
-- **`--live` enumeration succeeded** → observed → a real tier.
+Here the config file **is** the observation. `server-filesystem /` in the
+arguments is read off disk, and what it grants is not in doubt. Only the exact
+tool list is, and that changes precision, not the reach class. geiger's standing
+principle is likely impact, not perfect impact.
 
-This is what gives `--live` a genuine job here instead of being a formality, and
-it keeps the new subsystem inside the same honesty contract as the rest of
-geiger. `--context` crown-jewel matches still force HIGH either way, because that
-is operator input rather than geiger's guess.
+Withholding a tier until enumeration would also make the common case useless.
+Most servers are stdio, and enumerating those needs `--spawn-stdio`, which runs
+third-party code and often cannot be run at all — so the default mode, the one
+most people run, would report nothing.
+
+So a surface that types cleanly is scored, and the note states where the reach
+came from:
+
+- **typed from the config** → scored, with an `evidence` finding naming the
+  config as the source and the flags that would confirm it.
+- **enumerated under `--live`** → scored, with `evidence` reporting that every
+  server reported its own tool list.
+- **servers configured, nothing typed** → `Undetermined` → the note reads
+  **UNKNOWN**. This is the case the flag was meant for: no catalog entry, no
+  recognizable arguments, no tool list.
+
+`--live` still earns its place. It replaces a claim about a package name with
+what the server reports, and it is the only way to learn the things a config
+cannot show: an unauthenticated tool surface, the authorization server behind a
+401, and the real tool and resource counts.
+
+`--context` crown-jewel matches still force HIGH, as everywhere else.
 
 The existing "multiple force multipliers compound" rule (`+20` for each beyond
 the first) already performs the chain arithmetic; the chains above simply feed it
