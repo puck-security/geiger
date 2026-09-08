@@ -10,10 +10,9 @@ import (
 // approval posture governing those calls, and the non-MCP tool surface (hooks,
 // skills, subagents) that reaches the same places by a different road.
 //
-// The surface, not the server, is the unit of analysis. Every composition in
-// chains.go — corpus read plus egress, the lethal trifecta, exec closure — is a
-// property of the UNION of an agent's tools. A per-server view cannot see any of
-// them, which is precisely the gap this package exists to close.
+// The surface, not the server, is the unit of analysis. Every chain in chains.go
+// is a property of the union of an agent's tools. A per-server view cannot see
+// any of them, which is the gap this package exists to close.
 
 // Runtime names the agent client a surface was read from.
 type Runtime string
@@ -50,15 +49,35 @@ type Hook struct {
 // its tool chain as a whole.
 func (s Surface) Caps() Caps {
 	var out Caps
+	scopes := map[Cap]map[string]bool{}
 	for _, srv := range s.Servers {
 		out = out.Merge(srv.Caps)
+		for _, c := range srv.Caps {
+			if c.Scope == "" {
+				continue
+			}
+			if scopes[c.Cap] == nil {
+				scopes[c.Cap] = map[string]bool{}
+			}
+			scopes[c.Cap][c.Scope] = true
+		}
+	}
+	// Two servers can supply the same primitive at different scopes. Merging
+	// keeps the first, which would print one server's scope against a line that
+	// covers both, so drop it and let the per-server lines carry the detail. A
+	// broad filesystem root is kept: that is the reach an operator has to assume
+	// for the surface either way.
+	for i := range out {
+		if len(scopes[out[i].Cap]) > 1 && !out[i].Broad {
+			out[i].Scope = ""
+		}
 	}
 	return out
 }
 
 // Enumerated reports whether any server's real tool list was observed. Until one
-// was, every capability on the surface is geiger's claim about a package name,
-// and the note must stay Undetermined.
+// was, every capability on the surface is geiger's reading of a package name,
+// which is what the note's evidence line says.
 func (s Surface) Enumerated() bool {
 	for _, srv := range s.Servers {
 		if srv.Enumerated {
@@ -227,11 +246,17 @@ func parseServer(name string, m map[string]any) Server {
 	return srv
 }
 
-// skipPermissionKeys are the runtime-wide approval bypasses across clients.
+// skipPermissionKeys are the runtime-wide approval bypasses across clients,
+// spelled as a boolean.
 var skipPermissionKeys = []string{
 	"dangerouslySkipPermissions", "bypassPermissions", "yoloMode", "alwaysAllowExecute",
 	"autoApprovalEnabled", "skipPermissions", "acceptAllEdits",
 }
+
+// skipPermissionValues are the same thing spelled as a mode string. Claude Code
+// writes permissions.defaultMode, and that is the documented way to turn prompts
+// off, so a boolean-only search misses the common case.
+var skipPermissionValues = []string{"bypassPermissions", "dontAsk", "yolo"}
 
 // skipPermissions finds a runtime-wide approval bypass anywhere in the config.
 // Clients nest these under different parents (permissions, settings, security),
@@ -239,13 +264,21 @@ var skipPermissionKeys = []string{
 func skipPermissions(root map[string]any) bool {
 	found := false
 	walkMap(root, 0, func(k string, v any) {
-		b, ok := v.(bool)
-		if !ok || !b {
-			return
-		}
-		for _, want := range skipPermissionKeys {
-			if strings.EqualFold(k, want) {
-				found = true
+		switch tv := v.(type) {
+		case bool:
+			if !tv {
+				return
+			}
+			for _, want := range skipPermissionKeys {
+				if strings.EqualFold(k, want) {
+					found = true
+				}
+			}
+		case string:
+			for _, want := range skipPermissionValues {
+				if strings.EqualFold(tv, want) {
+					found = true
+				}
 			}
 		}
 	})

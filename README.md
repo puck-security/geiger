@@ -184,39 +184,47 @@ geiger --live --spawn-stdio ~/.claude    # + run local stdio servers to enumerat
 
 Each server is typed into **reach primitives** — `exec`, `corpus-search`,
 `secrets-read`, `code-write`, `cloud-control`, `fs-read`/`fs-write` *with their root
-scope*, `data-read`, `net-egress`, `untrusted-in`, `destructive`, `identity-admin`.
-Bulk corpus read is deliberately its own primitive and its own force multiplier:
-*"give me every credential in Confluence"* is one tool call, the highest-yield move
-in a real engagement, and folding it into a generic "reads data" buries it.
+path*, `data-read`, `net-egress`, `untrusted-in`, `destructive`, `identity-admin`.
+Bulk store search is deliberately its own primitive: *"give me every credential in
+Confluence"* is one tool call and the highest-yield move in a real engagement, so
+folding it into a generic "reads data" would bury it.
 
-Then the **compositions** — reach that exists only because the tools share one
-context window, and that no per-component scanner can see:
+That list is inventory, and it does not set a tier. A config file says what an
+agent is wired to; it cannot say whether that is appropriate for the machine it
+is on, and a filesystem server scoped to a project directory is the normal setup.
+An ordinary developer laptop scores INFO.
+
+The tier comes from the **compositions** — reach that exists only because the
+tools share one context window, which no per-component scanner can see:
 
 | Chain | Why it matters |
 |---|---|
-| corpus exfiltration | bulk search + an outbound channel: search the wiki, post the results out. No exploit, no privilege boundary crossed |
-| lethal trifecta | untrusted content + private data + a way out — one poisoned page and the agent exfiltrates whatever it can read |
-| exec closure | an `exec` tool makes the agent's reach the host's reach: every credential on the box, including geiger's other findings in the same run |
-| credential laundering | a secrets tool converts tool-chain access into standing credentials that outlive the session |
-| cross-server shadowing | an untrusted-content server sharing a context with a high-reach one |
-| unpinned supply chain | `npx -y` / `uvx` refetch at every launch — a rug-pull needs no config change |
+| lethal trifecta | untrusted content, private data and a way out in one context — one poisoned page and the agent leaks what it can read |
+| bulk read plus a way out | search the store, send the results. Two tool calls, no exploit |
+| runs commands on this host | an `exec` tool makes the agent's reach the host's reach: every credential on the box, geiger's other findings in the same run included |
+| reads a secret store | tool-chain access becomes credentials that outlive the session |
+| untrusted content next to wide reach | a low-trust server sharing a context with a high-reach one |
+| package fetched fresh at every start | `npx -y` / `uvx` refetch at every launch, so the code that runs tomorrow need not be the code in the config |
 
-**Auto-approval** (`permissions.allow`, `alwaysAllow`, YOLO mode) is scored as a
-property of the whole surface, because it removes the human from every chain above
-at once. **Hooks** are inventoried too: they run shell on lifecycle events with no
-model and no approval anywhere in the path, which is strictly more reach than any
-MCP tool beside them.
+Alongside those, three things the file itself establishes: a filesystem root that
+is the whole disk or home directory rather than a project, **no approval prompt**
+(`permissions.allow`, `alwaysAllow`, YOLO mode), scored as a property of the whole
+surface because it removes the human from every chain at once, and — under
+`--live` only — a server that answers with no credential or is reached over
+plaintext. **Hooks** are inventoried too: they run shell on lifecycle events with
+no model and no approval in that path, and nothing else lists them.
 
 Runtimes read: Claude Code and Claude Desktop, Cursor, VS Code, Windsurf,
 Cline/Roo/Kilo, Continue, Gemini CLI, Zed, Codex, Goose.
 
-**Honest by construction.** Typing a server from its package name is geiger's
-*claim*, not an observation, so an un-enumerated surface reads `UNKNOWN` with the
-claim fully visible — never a severity invented from a guess. `--live` enumerates
-the servers' real tool lists (`tools/list`, read-only, `tools/call` is never
-issued) and that is what earns a real tier. `--spawn-stdio` is a separate flag from
-`--intrusive` on purpose: running a local server means executing an argv that came
-out of the scanned file, which is worse than anything `--intrusive` permits.
+**Honest by construction.** The note always says where the reach came from: read
+from the config (what these packages are known to do) or reported by the servers
+themselves. A surface whose servers type to nothing at all reads `UNKNOWN` rather
+than getting a severity invented from a guess. `--live` enumerates the servers'
+real tool lists (`tools/list`, read-only; `tools/call` is never issued).
+`--spawn-stdio` is a separate flag from `--intrusive` on purpose: running a local
+server means executing an argv that came out of the scanned file, which is worse
+than anything `--intrusive` permits.
 
 See [docs/design/agentic-reach.md](docs/design/agentic-reach.md) for the design.
 

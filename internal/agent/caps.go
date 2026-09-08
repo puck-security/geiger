@@ -9,8 +9,13 @@
 // The package types each configured server into a set of reach primitives
 // (offline, from the catalog and from argv/env heuristics), optionally confirms
 // them by enumerating the server's real tool list read-only, and reports the
-// compositions that are worth more than the sum of their parts — bulk corpus
-// read plus an egress channel, the lethal trifecta, exec closure over the host.
+// chains that are worth more than the sum of their parts — the lethal trifecta,
+// bulk read plus a way out, an exec tool, a secret store.
+//
+// That primitive list is inventory and does not set a tier on its own: a config
+// file cannot say whether the reach it describes is appropriate for the machine
+// it sits on. Severity comes from the chains. See the note at the top of
+// findings.go.
 //
 // See docs/design/agentic-reach.md.
 package agent
@@ -156,64 +161,58 @@ func (c Cap) Name() string {
 	return "unknown"
 }
 
-// Why is the one-line reason this primitive matters, written for a responder
-// deciding what to do first.
+// Why is the one-line reason this primitive matters, written for someone
+// deciding what to look at first.
 func (c Cap) Why() string {
 	switch c {
 	case CapExec:
-		return "runs commands on the host — the agent's reach is the host's reach, including every other credential on it"
+		return "runs commands on this host"
 	case CapCorpusSearch:
-		return "searches an entire document corpus in one call — the highest-yield agentic recon primitive (one query returns every secret a human ever pasted into the wiki)"
+		return "searches a whole document store in one call"
 	case CapSecretsRead:
-		return "reads a secret store — yields downstream credentials, each with its own blast radius"
+		return "reads a secret store"
 	case CapCodeWrite:
-		return "pushes code or publishes packages — supply-chain reach beyond this host"
+		return "pushes code or publishes packages"
 	case CapCloudControl:
-		return "reaches a cloud control plane — infrastructure-level actions"
+		return "reaches a cloud control plane"
 	case CapDestructive:
-		return "deletes or terminates resources — irreversible without a restore"
+		return "deletes or terminates resources"
 	case CapIdentityAdmin:
-		return "writes to an identity provider or directory — can grant itself standing access"
+		return "changes users or groups in an identity provider"
 	case CapFSRead:
 		return "reads local files"
 	case CapFSWrite:
-		return "writes local files — can plant code that later executes"
+		return "writes local files"
 	case CapDataRead:
-		return "reads scoped private data"
+		return "reads private data"
 	case CapNetEgress:
-		return "sends data outward on a caller-controlled destination — the exfiltration channel"
+		return "sends data to a URL the caller picks"
 	case CapUntrustedIn:
-		return "ingests attacker-influenceable content — the prompt-injection entry point"
+		return "reads content an attacker can influence"
 	}
 	return ""
 }
 
-// forceMultipliers are the primitives that turn "an agent is configured" into
-// "an incident" on their own, without needing to be chained.
-const forceMultipliers = Set(CapExec | CapCorpusSearch | CapSecretsRead |
+// highReach are the primitives worth pointing at on a server line. They do not
+// set a tier on their own. A capability line is an inventory of what the agent
+// is wired to, and reading a config file cannot tell you whether that reach is
+// appropriate for this machine. Severity comes from chains.go, where several
+// capabilities sharing one context add up to something the config alone does
+// not say.
+const highReach = Set(CapExec | CapCorpusSearch | CapSecretsRead |
 	CapCodeWrite | CapCloudControl | CapDestructive | CapIdentityAdmin)
 
-// warnCaps are notable but not, alone, an incident.
-const warnCaps = Set(CapDataRead | CapNetEgress | CapUntrustedIn)
-
-// Flag maps a primitive to its finding significance, given the scope it was
-// found at. Filesystem reach is the one primitive whose weight is decided by
-// scope rather than by kind: a server rooted at / and one rooted at ./project
-// are the same package two orders of magnitude apart, so scope is an input here
-// rather than a cosmetic detail on the finding.
+// Flag says how a capability line is reported.
+//
+// Inventory carries no weight, so the answer is normally FlagNone. The one
+// exception is filesystem reach at a broad root: a server rooted at / or $HOME
+// and one rooted at ./project are the same package two orders of magnitude
+// apart, and the config says which it is.
 func (c Cap) Flag(broadScope bool) module.FlagLevel {
-	switch {
-	case forceMultipliers.Has(c):
-		return module.FlagForceMultiplier
-	case c == CapFSWrite, c == CapFSRead:
-		if broadScope {
-			return module.FlagForceMultiplier
-		}
-		return module.FlagWarn
-	case warnCaps.Has(c):
+	if broadScope && (c == CapFSRead || c == CapFSWrite) {
 		return module.FlagWarn
 	}
-	return module.FlagInfo
+	return module.FlagNone
 }
 
 // Capability is one primitive as found on a specific server, with the scope it

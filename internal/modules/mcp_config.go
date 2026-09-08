@@ -28,9 +28,9 @@ import (
 //     OAuth flow — can still wire the agent to a filesystem server rooted at /,
 //     a shell server, and the corporate wiki. The credential hygiene is
 //     irrelevant to that blast radius. internal/agent types each server's reach,
-//     enumerates it read-only under --live, and reports the compositions (bulk
-//     corpus read plus an egress channel, the lethal trifecta, exec closure)
-//     that only exist because the tools share one context.
+//     enumerates it read-only under --live, and reports the chains — the lethal
+//     trifecta, bulk read plus a way out, an exec tool, a secret store — that
+//     exist only because the tools share one context.
 //
 // See docs/design/agentic-reach.md.
 

@@ -70,11 +70,11 @@ var catalog = []entry{
 	{match: "weaviate", caps: []Cap{CapCorpusSearch, CapDataRead}, scope: "Weaviate", label: "Weaviate"},
 
 	// ---- source control: corpus search AND supply-chain write ----
-	{match: "github-mcp-server", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn, CapSecretsRead}, scope: "GitHub", label: "GitHub"},
-	{match: "server-github", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn, CapSecretsRead}, scope: "GitHub", label: "GitHub"},
+	{match: "github-mcp-server", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn}, scope: "GitHub", label: "GitHub"},
+	{match: "server-github", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn}, scope: "GitHub", label: "GitHub"},
 	{match: "githubcopilot.com/mcp", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn}, scope: "GitHub", label: "GitHub"},
-	{match: "server-gitlab", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn, CapSecretsRead}, scope: "GitLab", label: "GitLab"},
-	{match: "gitlab-mcp", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn, CapSecretsRead}, scope: "GitLab", label: "GitLab"},
+	{match: "server-gitlab", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn}, scope: "GitLab", label: "GitLab"},
+	{match: "gitlab-mcp", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn}, scope: "GitLab", label: "GitLab"},
 	{match: "bitbucket", caps: []Cap{CapCorpusSearch, CapCodeWrite, CapUntrustedIn}, scope: "Bitbucket", label: "Bitbucket"},
 	{match: "server-git", caps: []Cap{CapFSRead, CapFSWrite, CapCodeWrite}, label: "git"},
 
@@ -93,7 +93,7 @@ var catalog = []entry{
 	{match: "awslabs", caps: []Cap{CapCloudControl, CapSecretsRead, CapDataRead}, scope: "AWS", label: "AWS"},
 	{match: "azure-mcp", caps: []Cap{CapCloudControl, CapSecretsRead, CapDataRead, CapDestructive}, scope: "Azure", label: "Azure"},
 	{match: "gcp-mcp", caps: []Cap{CapCloudControl, CapSecretsRead, CapDataRead, CapDestructive}, scope: "GCP", label: "GCP"},
-	{match: "cloudflare", caps: []Cap{CapCloudControl, CapSecretsRead}, scope: "Cloudflare", label: "Cloudflare"},
+	{match: "cloudflare", caps: []Cap{CapCloudControl}, scope: "Cloudflare", label: "Cloudflare"},
 	{match: "terraform", caps: []Cap{CapCloudControl, CapSecretsRead, CapDestructive}, scope: "Terraform", label: "Terraform"},
 
 	// ---- identity ----

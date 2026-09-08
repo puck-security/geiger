@@ -146,15 +146,19 @@ func TestMCPConfigScoresReachWithoutAnySecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := indexByKey(fs)
-	for _, key := range []string{"corpus-search", "fs-read", "fs-write", "chain: corpus exfiltration", "chain: lethal trifecta"} {
-		f, ok := idx[key]
-		if !ok {
+	// The capability lines are inventory and carry no weight; the chain they
+	// take part in is what makes the surface score.
+	for _, key := range []string{"corpus-search", "fs-read", "fs-write"} {
+		if _, ok := idx[key]; !ok {
 			t.Errorf("missing finding %q — reach must be reported independently of secrets", key)
-			continue
 		}
-		if f.Flag != module.FlagForceMultiplier {
-			t.Errorf("%s flag = %v, want force multiplier", key, f.Flag)
-		}
+	}
+	f, ok := idx["chain: lethal trifecta"]
+	if !ok {
+		t.Fatal("missing the trifecta chain — reach must be reported independently of secrets")
+	}
+	if f.Flag != module.FlagForceMultiplier {
+		t.Errorf("trifecta flag = %v, want force multiplier", f.Flag)
 	}
 
 	// The config types cleanly, so it is scored rather than withheld. The note
@@ -168,7 +172,7 @@ func TestMCPConfigScoresReachWithoutAnySecret(t *testing.T) {
 	}
 	if e, ok := findingFor(n.Findings, "evidence"); !ok {
 		t.Error("the note must state how the reach was established")
-	} else if !strings.Contains(e.Value, "typed from the config") {
+	} else if !strings.Contains(e.Value, "read from the config") {
 		t.Errorf("evidence should name the config as the source: %q", e.Value)
 	}
 	// The sentinels must not leak into the printed findings.

@@ -77,22 +77,23 @@ func TestReachIsIndependentOfInlineSecrets(t *testing.T) {
 	}
 }
 
-// Bulk corpus read is the top-yield red-team primitive and must outrank a
-// scoped read, not be folded into it.
-func TestCorpusSearchIsAForceMultiplier(t *testing.T) {
-	if got := CapCorpusSearch.Flag(false); got != module.FlagForceMultiplier {
-		t.Errorf("corpus-search flag = %v, want force multiplier", got)
+// Capability lines are inventory. Knowing an agent can search a document store
+// says nothing about whether that is a problem on this machine, so the line
+// carries no weight and the chain it takes part in carries it instead.
+func TestCapabilityLinesAreInventory(t *testing.T) {
+	if got := CapCorpusSearch.Flag(false); got != module.FlagNone {
+		t.Errorf("corpus-search flag = %v, want none", got)
 	}
-	if got := CapDataRead.Flag(false); got != module.FlagWarn {
-		t.Errorf("data-read flag = %v, want warn — it must NOT rank with corpus-search", got)
+	if got := CapExec.Flag(false); got != module.FlagNone {
+		t.Errorf("exec flag = %v, want none", got)
 	}
 	s := parse(t, "mcp.json", noSecretsFixture)
 	f, ok := findingFor(s.Findings(), "corpus-search")
 	if !ok {
 		t.Fatal("no corpus-search finding")
 	}
-	if f.Flag != module.FlagForceMultiplier {
-		t.Errorf("corpus-search finding flag = %v, want force multiplier", f.Flag)
+	if f.Flag != module.FlagNone {
+		t.Errorf("corpus-search finding flag = %v, want none", f.Flag)
 	}
 	// And it must not be doubled up with a redundant data-read line.
 	if _, dup := findingFor(s.Findings(), "data-read"); dup {
@@ -112,13 +113,18 @@ func TestFilesystemScopeDecidesSeverity(t *testing.T) {
 	if narrow.Caps().BroadFS() {
 		t.Error("a filesystem server rooted at ./project must NOT be broad")
 	}
-	bf, _ := findingFor(broad.Findings(), "fs-read")
-	nf, _ := findingFor(narrow.Findings(), "fs-read")
-	if bf.Flag != module.FlagForceMultiplier {
-		t.Errorf("fs-read at / = %v, want force multiplier", bf.Flag)
+	// Read and write at the same broad path are one fact, so only the first
+	// line is marked. fs-write sorts first.
+	bf, _ := findingFor(broad.Findings(), "fs-write")
+	nf, _ := findingFor(narrow.Findings(), "fs-write")
+	if bf.Flag != module.FlagWarn {
+		t.Errorf("fs-write at / = %v, want warn", bf.Flag)
 	}
-	if nf.Flag == module.FlagForceMultiplier {
-		t.Error("fs-read at ./project must not be a force multiplier")
+	if nf.Flag != module.FlagNone {
+		t.Errorf("fs-write at ./project = %v, want none", nf.Flag)
+	}
+	if r, _ := findingFor(broad.Findings(), "fs-read"); r.Flag != module.FlagNone {
+		t.Errorf("fs-read at / = %v, want none — the write line already carries it", r.Flag)
 	}
 }
 
@@ -140,25 +146,50 @@ func TestBroadPath(t *testing.T) {
 func TestChains(t *testing.T) {
 	s := parse(t, "mcp.json", noSecretsFixture)
 	cs := Chains(s)
-	for _, want := range []string{"corpus exfiltration", "lethal trifecta", "cross-server shadowing", "unpinned supply chain"} {
+	for _, want := range []string{"lethal trifecta", "untrusted content next to wide reach", "package fetched fresh at every start"} {
 		if !hasChain(cs, want) {
 			t.Errorf("missing chain %q; got %v", want, cs)
 		}
 	}
 
-	// exec closure only when something actually runs code.
-	if hasChain(cs, "exec closure") {
-		t.Error("no exec tool on this surface, so no exec closure")
+	// The exec chain only when something actually runs code.
+	if hasChain(cs, "runs commands on this host") {
+		t.Error("no exec tool on this surface, so no exec chain")
 	}
 	sh := parse(t, "mcp.json", `{"mcpServers":{"sh":{"command":"uvx","args":["mcp-server-shell"]}}}`)
-	if !hasChain(Chains(sh), "exec closure") {
-		t.Error("a shell server must produce exec closure")
+	if !hasChain(Chains(sh), "runs commands on this host") {
+		t.Error("a shell server must produce the exec chain")
 	}
 
 	// A lone corpus server has nowhere to send anything: no exfil chain.
 	solo := parse(t, "mcp.json", `{"mcpServers":{"c":{"command":"uvx","args":["mcp-atlassian"]}}}`)
-	if hasChain(Chains(solo), "corpus exfiltration") {
+	if hasChain(Chains(solo), "bulk read plus a way out") {
 		t.Error("corpus search with no egress channel is not an exfiltration chain")
+	}
+}
+
+// The bulk-read chain and the trifecta describe the same servers when untrusted
+// input is in the mix. Reporting both counts one fact twice and inflates the
+// tier, so the weaker one stands down.
+func TestBulkReadChainStandsDownForTheTrifecta(t *testing.T) {
+	both := parse(t, "mcp.json", `{"mcpServers":{
+		"wiki":{"command":"uvx","args":["mcp-atlassian"]},
+		"web":{"command":"uvx","args":["mcp-server-fetch"]}}}`)
+	cs := Chains(both)
+	if !hasChain(cs, "lethal trifecta") {
+		t.Fatalf("expected the trifecta on this surface: %v", cs)
+	}
+	if hasChain(cs, "bulk read plus a way out") {
+		t.Error("the bulk-read chain must not be reported alongside the trifecta")
+	}
+
+	// Without untrusted input there is no trifecta, and the bulk-read chain is
+	// the finding that stands.
+	quiet := parse(t, "mcp.json", `{"mcpServers":{
+		"index":{"command":"uvx","args":["mcp-server-qdrant"]},
+		"mail":{"command":"npx","args":["-y","mcp-server-sendgrid"]}}}`)
+	if cs := Chains(quiet); !hasChain(cs, "bulk read plus a way out") {
+		t.Errorf("bulk read with an outbound channel is a chain on its own: %v", cs)
 	}
 }
 
@@ -251,7 +282,8 @@ func TestApprovalPosture(t *testing.T) {
 }
 
 // Hooks run shell on lifecycle events with no model and no approval anywhere in
-// the path — more reach than any MCP tool, and nothing else inventories them.
+// the path. Nothing else inventories them, and what the command does decides
+// whether it matters, so the finding points at them without rating them.
 func TestHooksAreReported(t *testing.T) {
 	s := parse(t, "/home/u/.claude/settings.json", `{
 		"hooks": {"PreToolUse": [{"hooks": [{"command": "/opt/ci/audit.sh"}]}]}}`)
@@ -262,8 +294,37 @@ func TestHooksAreReported(t *testing.T) {
 	if !ok {
 		t.Fatal("no hooks finding")
 	}
+	if f.Flag != module.FlagInfo {
+		t.Errorf("hooks flag = %v, want info", f.Flag)
+	}
+}
+
+// Claude Code turns prompts off with a mode string, not a boolean, and that is
+// the documented way to do it — a boolean-only search would miss the common case.
+func TestApprovalModeString(t *testing.T) {
+	s := parse(t, "/home/u/.claude/settings.json",
+		`{"permissions":{"defaultMode":"bypassPermissions"},"mcpServers":{"sh":{"command":"uvx","args":["mcp-server-shell"]}}}`)
+	if !s.SkipPermissions {
+		t.Fatal("permissions.defaultMode=bypassPermissions must count as no approval prompt")
+	}
+	f, ok := findingFor(s.Findings(), "approval")
+	if !ok {
+		t.Fatal("no approval finding")
+	}
+	// A chain sits behind it, so the last mitigation on that chain is gone.
 	if f.Flag != module.FlagForceMultiplier {
-		t.Errorf("hooks flag = %v, want force multiplier", f.Flag)
+		t.Errorf("approval flag = %v, want force multiplier", f.Flag)
+	}
+
+	// With nothing behind it, the same setting is worth far less.
+	quiet := parse(t, "/home/u/.claude/settings.json",
+		`{"permissions":{"defaultMode":"bypassPermissions"},"mcpServers":{"clock":{"command":"npx","args":["-y","@modelcontextprotocol/server-time"]}}}`)
+	q, ok := findingFor(quiet.Findings(), "approval")
+	if !ok {
+		t.Fatal("no approval finding")
+	}
+	if q.Flag != module.FlagInfo {
+		t.Errorf("approval flag with nothing behind it = %v, want info", q.Flag)
 	}
 }
 
@@ -320,7 +381,7 @@ func TestConfigTypedSurfaceIsScored(t *testing.T) {
 	if !ok {
 		t.Fatal("a config-typed surface must state how its reach was established")
 	}
-	if !strings.Contains(e.Value, "typed from the config") || !strings.Contains(e.Value, "--live") {
+	if !strings.Contains(e.Value, "read from the config") || !strings.Contains(e.Value, "--live") {
 		t.Errorf("evidence should name the source and the way to confirm it: %q", e.Value)
 	}
 	if !strings.Contains(e.Value, "--spawn-stdio") {

@@ -10,12 +10,23 @@ import (
 
 // Rendering a Surface into geiger's finding vocabulary.
 //
-// A surface that types cleanly is scored, whether or not its servers were
-// enumerated: the config file is itself an observation of what the agent is
-// wired to. Undetermined is kept for the case where servers are configured but
-// nothing about their reach could be established. See Surface.Summarize for the
-// reasoning, and evidenceFindings for how the note tells the reader which of the
-// two it is looking at.
+// Scoring discipline. Reading a config file tells you what an agent is wired
+// to. It does not tell you whether that is appropriate: a filesystem server
+// scoped to a project directory is the normal setup, and geiger has no way to
+// know from the file whether the machine it is on is a laptop or a build
+// runner. So the inventory carries no weight. The census line is the one
+// informational finding; capability lines, server lines and the evidence
+// caveat are context.
+//
+// Weight is attached only where the config itself establishes something:
+//
+//   - a filesystem root that is broad (/ or $HOME) rather than scoped,
+//   - a chain, where several capabilities meet in one context (chains.go),
+//   - approval turned off, which removes the human from every chain at once,
+//   - a server observed answering with no credential, or reached over plaintext.
+//
+// This keeps an ordinary developer setup at INFO and reserves the top of the
+// scale for surfaces where the file says something specific went wrong.
 
 // Findings renders the surface as note findings, worst first.
 func (s Surface) Findings() []module.Finding {
@@ -33,10 +44,8 @@ func (s Surface) Findings() []module.Finding {
 	return out
 }
 
-// evidenceFindings say how the reach above was established. The tier no longer
-// encodes that, so the note states it plainly: a config-typed surface is scored
-// on what its servers are known to do, and --live replaces that with what they
-// report doing.
+// evidenceFindings say how the reach above was established: typed from the
+// config, or reported by the servers themselves.
 func (s Surface) evidenceFindings() []module.Finding {
 	if len(s.Servers) == 0 {
 		return nil
@@ -53,16 +62,16 @@ func (s Surface) evidenceFindings() []module.Finding {
 	if enumerated == total {
 		return []module.Finding{{
 			Key:   "evidence",
-			Value: fmt.Sprintf("reach observed: all %d server(s) reported their own tool list", total),
-			Flag:  module.FlagInfo,
+			Value: fmt.Sprintf("observed: all %d server(s) reported their own tool list", total),
+			Flag:  module.FlagNone,
 		}}
 	}
-	v := fmt.Sprintf("reach typed from the config for %d of %d server(s) — what these servers are known to do, "+
-		"not what this deployment was seen doing. Re-run with --live to ask each one", total-enumerated, total)
+	v := fmt.Sprintf("read from the config for %d of %d server(s) — what these packages are known to do, "+
+		"not what this install was seen doing. Use --live to ask each server", total-enumerated, total)
 	if stdio > 0 {
-		v += fmt.Sprintf("; %d are stdio and also need --spawn-stdio, which runs the configured command", stdio)
+		v += fmt.Sprintf("; %d are local and also need --spawn-stdio, which runs the configured command", stdio)
 	}
-	return []module.Finding{{Key: "evidence", Value: v, Flag: module.FlagInfo}}
+	return []module.Finding{{Key: "evidence", Value: v, Flag: module.FlagNone}}
 }
 
 // inventoryFinding is the always-present census line.
@@ -75,22 +84,23 @@ func (s Surface) inventoryFinding() module.Finding {
 			stdio++
 		}
 	}
-	v := fmt.Sprintf("%d MCP server(s) wired to %s: %d stdio, %d remote",
+	v := fmt.Sprintf("%d MCP server(s) wired to %s: %d local, %d remote",
 		len(s.Servers), s.Runtime, stdio, remote)
 	return module.Finding{Key: "tool chain", Value: v, Flag: module.FlagInfo}
 }
 
-// postureFinding reports the approval posture. Auto-approval is not a finding
-// about one server — it removes the human from every chain on the surface at
-// once, which is why it is reported as a property of the surface and why it
-// carries force-multiplier weight when real reach sits behind it.
+// postureFinding reports whether a human approves tool calls. This is not a
+// fact about one server: it removes the prompt from every chain on the surface
+// at once, so it is reported as a property of the surface. It carries weight
+// only in proportion to what is behind it — turning off prompts for a clock
+// server is housekeeping.
 func (s Surface) postureFinding() (module.Finding, bool) {
 	if !s.AutoApproved() {
 		return module.Finding{}, false
 	}
 	var how []string
 	if s.SkipPermissions {
-		how = append(how, "permission prompts disabled runtime-wide")
+		how = append(how, "prompts disabled for the whole runtime")
 	}
 	if n := len(s.AllowRules); n > 0 {
 		how = append(how, fmt.Sprintf("%d blanket allow rule(s)", n))
@@ -110,37 +120,57 @@ func (s Surface) postureFinding() (module.Finding, bool) {
 		how = append(how, "pre-approved servers: "+strings.Join(perServer, ", "))
 	}
 
-	// Weight follows what is actually reachable without a human. Auto-approving
-	// a time server is housekeeping; auto-approving exec or a secret store means
-	// the last mitigation on every chain below is gone.
-	flag := module.FlagWarn
-	if s.Caps().Set()&forceMultipliers != 0 {
+	// A chain with no prompt in front of it is the case worth the top weight:
+	// the last thing standing between a poisoned page and the action is gone.
+	flag := module.FlagInfo
+	switch {
+	case hasForceMultiplier(Chains(s)):
 		flag = module.FlagForceMultiplier
+	case s.Caps().Set()&highReach != 0:
+		flag = module.FlagWarn
 	}
 	return module.Finding{
-		Key: "approval",
-		Value: "no human in the loop — " + strings.Join(how, "; ") +
-			". Every capability below is reachable without a prompt.",
+		Key:    "approval",
+		Value:  "no prompt before a tool runs — " + strings.Join(how, "; "),
 		Flag:   flag,
 		Detail: s.AllowRules,
 	}, true
 }
 
-// capabilityFindings report the surface's total reach, one line per primitive,
-// each carrying the servers that supply it.
+// hasForceMultiplier reports whether any chain is top-weight.
+func hasForceMultiplier(cs []Chain) bool {
+	for _, c := range cs {
+		if c.Flag == module.FlagForceMultiplier {
+			return true
+		}
+	}
+	return false
+}
+
+// capabilityFindings list the surface's total reach, one line per primitive,
+// each naming the servers that supply it. Inventory: see the note at the top of
+// this file for why these carry no weight.
 func (s Surface) capabilityFindings() []module.Finding {
 	caps := s.Caps().Sorted()
 	broad := s.Caps().BroadFS()
+	// Read and write at the same broad path are one fact. Mark the first line
+	// only, so a server that does both does not count twice.
+	marked := false
 	out := make([]module.Finding, 0, len(caps))
 	for _, c := range caps {
 		v := c.Cap.Why()
 		if c.Scope != "" {
 			v = "scope " + c.Scope + " — " + v
 		}
+		flag := module.FlagNone
+		if broad && (c.Cap == CapFSRead || c.Cap == CapFSWrite) && !marked {
+			v += " — anywhere on the disk or in the home directory, not one project"
+			flag, marked = c.Cap.Flag(true), true
+		}
 		out = append(out, module.Finding{
 			Key:    c.Cap.Name(),
 			Value:  v,
-			Flag:   c.Cap.Flag(broad && (c.Cap == CapFSRead || c.Cap == CapFSWrite)),
+			Flag:   flag,
 			Detail: serversWith(s, c.Cap),
 		})
 	}
@@ -162,16 +192,17 @@ func (s Surface) chainFindings() []module.Finding {
 	return out
 }
 
-// serverFindings report per-server detail. Servers with no identified reach are
+// serverFindings list the servers. Servers with no identified reach are
 // collapsed into a count, the way --browser collapses narrow extensions: a long
-// inventory of benign servers buries the two that matter.
+// list of harmless servers buries the two that matter.
 func (s Surface) serverFindings() []module.Finding {
 	var out []module.Finding
 	var benign []string
 	for _, srv := range s.Servers {
 		// No identified reach and nothing observed to contradict that. The
-		// enumeration note is not evidence either way — every un-spawned stdio
-		// server carries one — so it does not keep a benign server in the list.
+		// enumeration note is not evidence either way — every local server that
+		// was not spawned carries one — so it does not keep a server off this
+		// list.
 		if srv.Caps.Set().Empty() && !srv.Unauthenticated && !srv.PlaintextHTTP {
 			benign = append(benign, srv.Name)
 			continue
@@ -183,14 +214,16 @@ func (s Surface) serverFindings() []module.Finding {
 		out = append(out, module.Finding{
 			Key:    "narrow servers",
 			Value:  fmt.Sprintf("%d server(s) with no identified reach", len(benign)),
-			Flag:   module.FlagInfo,
+			Flag:   module.FlagNone,
 			Detail: benign,
 		})
 	}
 	return out
 }
 
-// serverFinding renders one server.
+// serverFinding renders one server. The line is inventory unless the server was
+// observed doing something a config cannot show: answering with no credential,
+// or being reached over plaintext http.
 func serverFinding(srv Server) module.Finding {
 	var parts []string
 	if srv.Label != "" {
@@ -205,13 +238,7 @@ func serverFinding(srv Server) module.Finding {
 	head := strings.Join(parts, ", ")
 
 	v := head + " — " + srv.Caps.Summary()
-	flag := module.FlagInfo
-	switch {
-	case srv.Caps.Set()&forceMultipliers != 0, srv.Caps.BroadFS():
-		flag = module.FlagForceMultiplier
-	case srv.Caps.Set()&warnCaps != 0:
-		flag = module.FlagWarn
-	}
+	flag := module.FlagNone
 
 	detail := append([]string(nil), srv.Tools...)
 	if srv.Transport == TransportHTTP && srv.URL != "" {
@@ -230,14 +257,12 @@ func serverFinding(srv Server) module.Finding {
 		detail = append(detail, fmt.Sprintf("%d resources, %d prompts", srv.ResourceCount, srv.PromptCount))
 	}
 
-	// Two conditions that are about the server itself rather than its reach, and
-	// that an operator acts on directly.
 	if srv.Unauthenticated {
-		v += " — ANSWERS tools/list WITH NO CREDENTIAL: this tool surface is open to anyone who can route to it"
+		v += " — answers tools/list with no credential, so this tool surface is open to anyone who can route to it"
 		flag = module.FlagForceMultiplier
 	}
 	if srv.PlaintextHTTP {
-		v += " — reached over plaintext http://, so its token crosses the wire in clear"
+		v += " — reached over plaintext http, so its token crosses the wire in clear"
 		if flag < module.FlagWarn {
 			flag = module.FlagWarn
 		}
@@ -249,10 +274,11 @@ func serverFinding(srv Server) module.Finding {
 	return module.Finding{Key: "server " + srv.Name, Value: v, Flag: flag, Detail: detail}
 }
 
-// hookFindings report lifecycle shell commands. A hook is not a tool the model
-// chooses to call — the runtime runs it on an event — so it executes with no
-// model and no approval anywhere in the path. That is strictly more reach than
-// any MCP tool on the same surface, and nothing else inventories it.
+// hookFindings list lifecycle shell commands and the instruction surface. A
+// hook is not a tool the model chooses to call — the runtime runs it on an
+// event, so no model and no approval sit in that path. That is worth a look,
+// and nothing else inventories it; whether the command is dangerous depends on
+// what it is, which is why the commands are in the detail.
 func (s Surface) hookFindings() []module.Finding {
 	var out []module.Finding
 	if len(s.Hooks) > 0 {
@@ -262,9 +288,9 @@ func (s Surface) hookFindings() []module.Finding {
 		}
 		out = append(out, module.Finding{
 			Key: "hooks",
-			Value: fmt.Sprintf("%d lifecycle hook(s) run shell on agent events — no model and no approval in the path, "+
-				"so this is host code execution triggered by the agent's own activity", len(s.Hooks)),
-			Flag:   module.FlagForceMultiplier,
+			Value: fmt.Sprintf("%d hook(s) run shell commands when the agent hits a lifecycle event — "+
+				"no model and no approval in that path", len(s.Hooks)),
+			Flag:   module.FlagInfo,
 			Detail: detail,
 		})
 	}
@@ -273,30 +299,29 @@ func (s Surface) hookFindings() []module.Finding {
 		out = append(out, module.Finding{
 			Key:    "instruction surface",
 			Value:  fmt.Sprintf("%d skill(s)/subagent(s) load instructions the agent follows", n),
-			Flag:   module.FlagInfo,
+			Flag:   module.FlagNone,
 			Detail: detail,
 		})
 	}
 	return out
 }
 
-// Summarize builds the note, and is the single place the Undetermined rule is
-// applied.
+// Summarize builds the note and applies the Undetermined rule.
 //
 // A config is not a credential. For a credential, Undetermined means geiger
-// could not establish the thing is even live, so scoring it would invent a
-// severity. Here the config file IS the observation: "server-filesystem /" in
-// the arguments is read off disk, and what it grants is not in doubt. Only the
-// exact tool list is, and that changes precision, not the reach class. geiger's
-// standing rule is likely impact, not perfect impact.
+// could not establish the thing is even live, so putting a tier on it would
+// invent a severity. Here the config file is the observation: "server-filesystem
+// /" in the arguments is read off disk, and what it grants is not in doubt.
+// Only the exact tool list is, and that changes precision, not the class of
+// reach.
 //
 // Withholding a tier until enumeration would also make the common case useless.
-// Most servers are stdio, and enumerating those needs --spawn-stdio, which runs
+// Most servers are local, and enumerating those needs --spawn-stdio, which runs
 // third-party code and often cannot be run at all — so the default mode, the one
 // people actually use, would never report anything.
 //
-// Undetermined is therefore kept for the case it was meant for: servers are
-// configured but nothing about their reach could be established.
+// Undetermined is kept for the case it was meant for: servers are configured
+// but nothing about their reach could be established.
 func (s Surface) Summarize(title string) module.Note {
 	fs := s.Findings()
 	n := module.Note{Title: title, Findings: fs, Summary: s.Summary()}

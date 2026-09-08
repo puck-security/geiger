@@ -9,15 +9,20 @@ import (
 
 // Compositions: reach that exists only because several tools share one context.
 //
-// Each chain below is a property of the UNION of an agent's tools, which is why
-// a per-component scanner cannot see any of them. A wiki search tool is a
-// warning; a wiki search tool in the same context window as a webhook tool is an
-// exfiltration path that needs no exploit and no privilege boundary crossed —
-// the agent is doing exactly what it was configured to do.
+// Each chain below is a property of the whole tool set, which is why a scanner
+// that looks at one server at a time cannot see any of them. A wiki search tool
+// on its own is inventory. A wiki search tool in the same context window as a
+// webhook tool is a way to leak the wiki, with no exploit and no privilege
+// boundary crossed — the agent is doing exactly what it was configured to do.
 //
-// These are reported as findings, not as a graph. geiger stays triage: the
+// This is also where severity comes from. A capability list says what the agent
+// is wired to; a scan of a config file cannot say whether that is appropriate.
+// A chain says several of those capabilities meet in one place, which is a fact
+// about the configuration rather than a guess about the operator.
+//
+// Chains are reported as findings, not as a graph. geiger stays triage: the
 // output says how bad this surface is and why, in the same vocabulary as every
-// other note. Path visualisation is a different tool.
+// other note. Drawing paths is a different tool.
 
 // Chain is one composition found on a surface.
 type Chain struct {
@@ -35,89 +40,89 @@ func Chains(s Surface) []Chain {
 	var out []Chain
 	set := s.Caps().Set()
 
-	// 1. Corpus exfiltration. The highest-yield agentic attack there is, and it
-	// needs no injection and no chained privilege: search the wiki, post the
-	// results out. "Give me every credential in Confluence" is one tool call;
-	// sending them somewhere is the second.
-	if set.Has(CapCorpusSearch) && set.HasAny(CapNetEgress, CapCodeWrite) {
-		out = append(out, Chain{
-			Name: "corpus exfiltration",
-			Why: "bulk corpus search shares a context with an outbound channel — one query returns every secret a human pasted into the wiki, " +
-				"and the next call sends it out. No exploit and no privilege boundary crossed.",
-			Via:  serversWith(s, CapCorpusSearch, CapNetEgress, CapCodeWrite),
-			Flag: module.FlagForceMultiplier,
-		})
-	}
-
-	// 2. The lethal trifecta (Willison, 2025): untrusted input, private data,
-	// and a way out. Any one is fine; all three in one agent means a poisoned
-	// document is sufficient to exfiltrate.
-	if set.Has(CapUntrustedIn) &&
+	// 1. The lethal trifecta (Willison, 2025): untrusted input, private data,
+	// and a way out. Any one alone is fine. All three in one agent means a
+	// poisoned document is enough to leak whatever the agent can read.
+	trifecta := set.Has(CapUntrustedIn) &&
 		set.HasAny(CapCorpusSearch, CapSecretsRead, CapDataRead, CapFSRead) &&
-		set.HasAny(CapNetEgress, CapCodeWrite) {
+		set.HasAny(CapNetEgress, CapCodeWrite)
+	if trifecta {
 		out = append(out, Chain{
 			Name: "lethal trifecta",
-			Why: "untrusted content, private data, and an outbound channel are all reachable in one context — " +
-				"a single poisoned page, issue, or ticket can make the agent exfiltrate whatever it can read",
+			Why: "the agent can read untrusted content, read private data, and send data out. " +
+				"One poisoned page, issue, or ticket is enough to make it leak what it can read.",
 			Via:  serversWith(s, CapUntrustedIn, CapCorpusSearch, CapSecretsRead, CapDataRead, CapFSRead, CapNetEgress, CapCodeWrite),
 			Flag: module.FlagForceMultiplier,
 		})
 	}
 
+	// 2. Bulk read plus a way out. One search returns everything anyone ever
+	// pasted into the wiki, and the next call sends it somewhere. Reported only
+	// when the trifecta did not already fire: with untrusted input in the mix
+	// this is the same finding with a weaker story, and counting it twice
+	// inflates the tier.
+	if !trifecta && set.Has(CapCorpusSearch) && set.HasAny(CapNetEgress, CapCodeWrite) {
+		out = append(out, Chain{
+			Name: "bulk read plus a way out",
+			Why: "the agent can search a whole document store and can also send data out. " +
+				"One search and one send is the whole path.",
+			Via:  serversWith(s, CapCorpusSearch, CapNetEgress, CapCodeWrite),
+			Flag: module.FlagForceMultiplier,
+		})
+	}
+
 	// 3. Exec closure. An exec tool makes the agent's reach the host's reach:
-	// every credential on the box, including all the ones geiger found in the
-	// same run, and every network path the host has.
+	// every credential on the box, including the ones geiger found in the same
+	// run, and every network path the host has.
 	if set.Has(CapExec) {
 		out = append(out, Chain{
-			Name: "exec closure",
-			Why: "a tool runs commands on this host, so the agent's reach is the host's reach — " +
-				"every credential on this box (including the other findings in this run) and every network path it has",
+			Name: "runs commands on this host",
+			Why: "a tool runs commands here, so the agent reaches whatever this host reaches — " +
+				"the other findings in this run included",
 			Via:  serversWith(s, CapExec),
 			Flag: module.FlagForceMultiplier,
 		})
 	}
 
-	// 4. Credential laundering. A secrets tool converts tool-chain access into
-	// real credentials, each with its own blast radius — the same fan-out
-	// geiger's --intrusive secret-store harvesting already performs.
+	// 4. A secrets tool turns tool-chain access into real credentials, each with
+	// its own blast radius.
 	if set.Has(CapSecretsRead) {
 		out = append(out, Chain{
-			Name: "credential laundering",
-			Why:  "a tool reads a secret store, so tool-chain access converts into standing credentials that outlive the agent session",
+			Name: "reads a secret store",
+			Why:  "a tool reads stored credentials, so access to the agent becomes access to whatever those credentials open, after the session ends",
 			Via:  serversWith(s, CapSecretsRead),
 			Flag: module.FlagForceMultiplier,
 		})
 	}
 
 	// 5. Cross-server shadowing. A server that ingests untrusted content shares
-	// a context window with a high-reach one; the model reads both tool lists
-	// and both results, so content from the low-trust server can steer calls to
-	// the high-trust one. The content half of this analysis (is a description
-	// actually poisoned) is agent-scan's job; the composition is ours.
+	// a context window with a high-reach one. The model reads both tool lists
+	// and both sets of results, so text from the first can steer calls to the
+	// second. Whether a description is actually poisoned is a content question
+	// and a different tool's job; the pairing is ours.
 	if lo, hi := shadowPair(s); lo != "" && hi != "" {
 		out = append(out, Chain{
-			Name: "cross-server shadowing",
-			Why: "an untrusted-content server (" + lo + ") shares one context with a high-reach server (" + hi + ") — " +
-				"content returned by the first is read by the model that calls the second",
+			Name: "untrusted content next to wide reach",
+			Why: lo + " reads untrusted content and " + hi + " has wide reach. " +
+				"They share one context, so text returned by the first is read by the model that calls the second.",
 			Via:  []string{lo, hi},
-			Flag: module.FlagWarn,
+			Flag: module.FlagInfo,
 		})
 	}
 
-	// 6. Unpinned supply chain. The capability set has no shelf life: a launcher
-	// that resolves "latest" at every start runs different code tomorrow with no
-	// change to the config anyone reviewed.
+	// 6. Unpinned launchers. The capability list has no shelf life if the
+	// package is resolved fresh at every start.
 	if un := unpinnedServers(s); len(un) > 0 {
-		flag := module.FlagWarn
-		// Unpinned code that is ALSO pre-approved is a rug-pull with no human in
-		// the path at any point.
+		flag := module.FlagInfo
+		// Unpinned code that is also pre-approved has no human anywhere in the
+		// path, so a package takeover lands straight on the host.
 		if s.AutoApproved() {
-			flag = module.FlagForceMultiplier
+			flag = module.FlagWarn
 		}
 		out = append(out, Chain{
-			Name: "unpinned supply chain",
-			Why: strings.Join(un, ", ") + " refetch their package at every launch — " +
-				"the code that runs tomorrow is not the code typed here, and a rug-pull needs no config change",
+			Name: "package fetched fresh at every start",
+			Why: strings.Join(un, ", ") + " refetch their package each time they launch, " +
+				"so the code that runs tomorrow need not be the code in this config",
 			Via:  un,
 			Flag: flag,
 		})
