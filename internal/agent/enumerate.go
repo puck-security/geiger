@@ -20,9 +20,10 @@ import (
 // SelfSubjectRulesReview. tools/call is NEVER issued: that is the line between
 // enumerating reach and exercising it.
 //
-// Enumeration is what promotes a note out of Undetermined. Everything the
-// catalog says is a claim about a package name; a tool list is the server's own
-// account of what it does.
+// Enumeration replaces what the catalog says a package does with the server's
+// own account of what it exposes. It also surfaces what no config can show: a
+// tool surface open to anyone who can route to it, the authorization server
+// behind a 401, and the real tool and resource counts.
 
 // Protocol versions geiger will speak, newest first. The wire protocol changed
 // materially at 2026-07-28 — sessions and the initialize/initialized handshake
@@ -65,13 +66,11 @@ type countResult struct {
 
 // clientMeta is the _meta block identifying geiger to a 2026-spec server.
 // Honest attribution, consistent with the rest of geiger's recon: a defender
-// reading their MCP access log sees who enumerated them.
+// reading their MCP access log sees exactly who enumerated them.
 func clientMeta(version string) map[string]any {
 	return map[string]any{
 		"io.modelcontextprotocol/protocolVersion":    version,
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
-		// Honest attribution, same as every other geiger call: a defender reading
-		// their MCP access log sees exactly who enumerated them.
 		"io.modelcontextprotocol/clientInfo": map[string]any{
 			"name": "geiger", "version": strings.TrimPrefix(recon.UserAgent, "geiger/"),
 		},
@@ -140,9 +139,9 @@ func EnumerateRemote(ctx context.Context, c *recon.Client, s *Server) {
 }
 
 // applyEnumeration records an observed tool list and folds its classification
-// into the server's capabilities. This is the only place Enumerated is set —
-// the flag means "a server told us what it does", and it is what lifts the note
-// out of UNKNOWN.
+// into the server's capabilities. This is the only place Enumerated is set: the
+// flag means "a server told us what it does", which is what the note's evidence
+// line reports and what sharpens a catalog guess into the real tool set.
 func applyEnumeration(s *Server, tools []Tool) {
 	s.Enumerated = true
 	s.Tools = ToolNames(tools)

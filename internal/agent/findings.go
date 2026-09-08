@@ -10,16 +10,12 @@ import (
 
 // Rendering a Surface into geiger's finding vocabulary.
 //
-// The one rule that governs everything here: a capability derived from a package
-// name is geiger's CLAIM, not an observation. score.TierFor is explicit that a
-// force multiplier must not floor an Undetermined note at HIGH, because that is
-// "invented severity in a different costume" — and typing a server from its argv
-// is exactly that kind of claim. So a surface whose servers were never
-// enumerated stays Undetermined and reads UNKNOWN, with the claim fully visible
-// in the findings and the Reason saying why it could not be confirmed.
-//
-// Enumeration is what changes that: once a server has reported its own tool
-// list, the reach is observed and the note earns a real tier.
+// A surface that types cleanly is scored, whether or not its servers were
+// enumerated: the config file is itself an observation of what the agent is
+// wired to. Undetermined is kept for the case where servers are configured but
+// nothing about their reach could be established. See Surface.Summarize for the
+// reasoning, and evidenceFindings for how the note tells the reader which of the
+// two it is looking at.
 
 // Findings renders the surface as note findings, worst first.
 func (s Surface) Findings() []module.Finding {
