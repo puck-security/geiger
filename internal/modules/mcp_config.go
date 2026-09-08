@@ -326,7 +326,7 @@ func undeterminedReason(c *recon.Client) string {
 	case !c.SpawnStdio():
 		return "no catalog entry and nothing in the arguments. --spawn-stdio would run each configured command and ask it"
 	}
-	return "no catalog entry, nothing in the arguments, and no server answered"
+	return "no catalog entry and nothing in the arguments"
 }
 
 // inlineSecretFindings report the aggregator axis: credentials sitting in the

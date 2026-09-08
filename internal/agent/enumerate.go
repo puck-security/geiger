@@ -89,6 +89,7 @@ func EnumerateRemote(ctx context.Context, c *recon.Client, s *Server) {
 		return
 	}
 
+	s.Asked = true
 	body, err := rpc(ctx, c, s.URL, "tools/list", nil, protoStateless)
 	if err != nil {
 		// A 2025-era server rejects a bare list call until the handshake has

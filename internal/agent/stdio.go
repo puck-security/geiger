@@ -66,6 +66,7 @@ func EnumerateStdio(ctx context.Context, s *Server, o SpawnOptions) {
 		s.EnumErr = "not enumerated: --spawn-stdio would RUN `" + argv + "`"
 		return
 	}
+	s.Asked = true
 	if o.Record != nil {
 		o.Record(argv)
 	}

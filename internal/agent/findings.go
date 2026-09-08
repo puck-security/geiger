@@ -37,12 +37,18 @@ func (s Surface) Findings() []module.Finding {
 	// chain and per-server lines are all empty in that case, and four lines
 	// saying so in different words are worse than one, so stop here — the
 	// census line names the servers and the note's undetermined reason says
-	// what would change it. The approval posture still gets reported: prompts
-	// being off is a fact about the file, not about what the servers reach.
+	// what would change it. Two things still get reported: the approval posture,
+	// because prompts being off is a fact about the file rather than about what
+	// the servers reach, and what came back when a server was asked, because
+	// "nothing answered" is the answer to the reader's next question.
 	if f, ok := s.postureFinding(); ok {
 		out = append(out, f)
 	}
 	if s.Untypeable() {
+		if f, ok := s.enumerationFinding(); ok {
+			out = append(out, f)
+		}
+		out = append(out, s.exposureFindings()...)
 		return append(out, s.hookFindings()...)
 	}
 	out = append(out, s.capabilityFindings()...)
@@ -57,6 +63,93 @@ func (s Surface) Findings() []module.Finding {
 // what any of them exposes.
 func (s Surface) Untypeable() bool {
 	return len(s.Servers) > 0 && s.Caps().Set().Empty()
+}
+
+// enumerationFinding reports what came back when the servers were asked.
+//
+// A note that says only "the reach is unknown" leaves the obvious question
+// unanswered: were they even running? geiger knows — it has the connection
+// error — and not saying so reads as if the flags did nothing. Servers that
+// were never asked (no --live, or a local server without --spawn-stdio) are not
+// reported here; the undetermined reason names the missing flag instead.
+func (s Surface) enumerationFinding() (module.Finding, bool) {
+	asked, answered := 0, 0
+	var detail []string
+	for _, srv := range s.Servers {
+		if !srv.Asked {
+			continue
+		}
+		asked++
+		if srv.Enumerated {
+			answered++
+			continue
+		}
+		detail = append(detail, srv.Name+": "+enumOutcome(srv))
+	}
+	if asked == 0 {
+		return module.Finding{}, false
+	}
+	sort.Strings(detail)
+	v := fmt.Sprintf("%d of %s answered", answered, plural(asked, "server"))
+	if answered == 0 {
+		v += " — nothing is serving them right now. The agent still starts them when it needs them, " +
+			"so this bounds what geiger could confirm, not what the agent reaches"
+	}
+	return module.Finding{Key: "asked", Value: v, Flag: module.FlagNone, Detail: detail}, true
+}
+
+// enumOutcome turns a transport error into something an operator can act on.
+// The exact error is already in the audit trail; what belongs in the note is
+// which of a handful of things went wrong.
+func enumOutcome(srv Server) string {
+	e := strings.ToLower(srv.EnumErr)
+	where := srv.URL
+	if where == "" {
+		where = strings.TrimSpace(srv.Command + " " + strings.Join(srv.Args, " "))
+	}
+	switch {
+	case strings.Contains(e, "connection refused"):
+		return "nothing is listening on " + where
+	case strings.Contains(e, "no such host"), strings.Contains(e, "name resolution"):
+		return "the host in " + where + " does not resolve"
+	case strings.Contains(e, "executable file not found"), strings.Contains(e, "no such file"):
+		return "`" + where + "` is not installed on this machine"
+	case strings.Contains(e, "timeout"), strings.Contains(e, "deadline exceeded"), strings.Contains(e, "timed out"):
+		return "timed out"
+	case strings.Contains(e, "authentication required"):
+		return "the credential in this config was not accepted"
+	case strings.Contains(e, "certificate"), strings.Contains(e, "tls"):
+		return "TLS handshake failed"
+	case srv.EnumErr == "":
+		return "no tool list came back"
+	}
+	return srv.EnumErr
+}
+
+// exposureFindings report the two conditions that are about a server itself
+// rather than about its reach, so they survive a surface nothing could be typed
+// on. Both need --live: no config says either.
+func (s Surface) exposureFindings() []module.Finding {
+	var out []module.Finding
+	for _, srv := range s.Servers {
+		if srv.Unauthenticated {
+			out = append(out, module.Finding{
+				Key:    "open tool surface",
+				Value:  srv.Name + " answered tools/list with no credential, so anyone who can route to it has its tools",
+				Flag:   module.FlagForceMultiplier,
+				Detail: []string{srv.URL},
+			})
+		}
+		if srv.PlaintextHTTP {
+			out = append(out, module.Finding{
+				Key:    "plaintext",
+				Value:  srv.Name + " is reached over http, so its credential crosses the wire in clear",
+				Flag:   module.FlagWarn,
+				Detail: []string{srv.URL},
+			})
+		}
+	}
+	return out
 }
 
 // evidenceFindings say how the reach above was established: read from the

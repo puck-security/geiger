@@ -697,3 +697,57 @@ func TestApprovalIsReportedEvenWhenNothingTypes(t *testing.T) {
 		t.Error("no approval finding on an untypeable surface")
 	}
 }
+
+// "The reach is unknown" leaves the obvious question unanswered: were the
+// servers even running? geiger has the connection error, and not saying so
+// reads as if --live did nothing.
+func TestAskedServersReportWhatCameBack(t *testing.T) {
+	s := parse(t, "/home/u/.claude.json", `{"mcpServers":{
+		"a":{"url":"http://10.0.0.9:8444/mcp"},
+		"b":{"command":"./some-unknown-binary"}}}`)
+	for i := range s.Servers {
+		s.Servers[i].Asked = true
+	}
+	s.Servers[0].EnumErr = `Post "http://10.0.0.9:8444/mcp": dial tcp: connect: connection refused`
+	s.Servers[1].EnumErr = `exec: "./some-unknown-binary": executable file not found in $PATH`
+
+	f, ok := findingFor(s.Findings(), "asked")
+	if !ok {
+		t.Fatal("a surface whose servers were asked must say what came back")
+	}
+	if !strings.Contains(f.Value, "0 of 2 servers answered") {
+		t.Errorf("the count belongs in the line: %q", f.Value)
+	}
+	joined := strings.Join(f.Detail, "\n")
+	if !strings.Contains(joined, "nothing is listening") || !strings.Contains(joined, "not installed on this machine") {
+		t.Errorf("each server needs a reason an operator can act on: %v", f.Detail)
+	}
+
+	// A server that was never asked is not reported here — the undetermined
+	// reason names the missing flag instead.
+	quiet := parse(t, "/home/u/.claude.json", `{"mcpServers":{"a":{"command":"./x"}}}`)
+	if _, ok := findingFor(quiet.Findings(), "asked"); ok {
+		t.Error("nothing was asked, so there is nothing to report")
+	}
+}
+
+// A local MCP server on http://localhost is the normal way to run one. Its
+// token never crosses a wire, so warning about plaintext there is noise.
+func TestPlaintextIsAboutTheWireNotTheScheme(t *testing.T) {
+	local := parse(t, "mcp.json", `{"mcpServers":{"a":{"url":"http://localhost:8444/mcp"}}}`)
+	if serverNamed(t, local, "a").PlaintextHTTP {
+		t.Error("loopback http does not put a credential on any wire")
+	}
+	remote := parse(t, "mcp.json", `{"mcpServers":{"a":{"url":"http://10.0.0.9:8444/mcp"}}}`)
+	if !serverNamed(t, remote, "a").PlaintextHTTP {
+		t.Error("cleartext to another host is exactly the case worth reporting")
+	}
+	// It survives a surface where nothing could be typed: it is a fact about
+	// the server, not about its reach.
+	if !remote.Untypeable() {
+		t.Fatal("fixture should type to nothing")
+	}
+	if _, ok := findingFor(remote.Findings(), "plaintext"); !ok {
+		t.Error("the plaintext finding must not be dropped with the reach lines")
+	}
+}

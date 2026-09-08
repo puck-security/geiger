@@ -67,6 +67,10 @@ type Server struct {
 	// ResourceCount / PromptCount are the enumerated resource and prompt counts.
 	ResourceCount int
 	PromptCount   int
+	// Asked records that geiger actually sent the server a request. It separates
+	// "we tried and it did not answer" from "we never tried", which are
+	// different answers to the reader's question and need different advice.
+	Asked bool
 	// EnumErr explains why enumeration did not happen or did not succeed.
 	EnumErr string
 	// Unauthenticated records that the remote server answered tools/list with no
@@ -113,7 +117,7 @@ func Type(s *Server) {
 	}
 	s.Unpinned = unpinnedLaunch(s.Command, s.Args)
 	if s.Transport == TransportHTTP {
-		s.PlaintextHTTP = strings.HasPrefix(strings.ToLower(s.URL), "http://")
+		s.PlaintextHTTP = plaintextOffHost(s.URL)
 	}
 	s.Caps = s.Caps.Merge(inferFromArgv(s))
 	s.Caps = s.Caps.Merge(inferFromEnv(s))
@@ -121,6 +125,26 @@ func Type(s *Server) {
 	// Every corpus search is also a read. Reporting both adds a warn line that
 	// says nothing the force multiplier above it did not already say.
 	s.Caps = demoteRedundantDataRead(s.Caps)
+}
+
+// loopbackHosts never leave the machine, so a token sent to one over http does
+// not cross a wire anyone can read. A local MCP server on http://localhost is
+// the normal way to run one, and warning about it is noise.
+var loopbackHosts = map[string]bool{
+	"localhost": true, "127.0.0.1": true, "::1": true, "[::1]": true, "0.0.0.0": true,
+}
+
+// plaintextOffHost reports a cleartext URL whose token actually crosses a
+// network.
+func plaintextOffHost(raw string) bool {
+	if !strings.HasPrefix(strings.ToLower(raw), "http://") {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return true // unparseable but cleartext: assume the worse case
+	}
+	return !loopbackHosts[strings.ToLower(u.Hostname())]
 }
 
 // unpinnedLaunch reports whether the launcher refetches its package on every
