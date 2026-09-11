@@ -40,6 +40,7 @@ var groups = []struct {
 		"openai", "anthropic", "claude_code_oauth", "gemini", "azure_openai", "cohere", "mistral",
 		"replicate", "huggingface", "groq", "together", "deepseek", "openrouter", "xai", "fireworks",
 		"perplexity", "elevenlabs", "stability", "pinecone", "bedrock", "mcp_config", "ai_ide_store",
+		"projectdiscovery_neo",
 	}},
 	{"Secrets managers & vaults", []string{
 		"vault", "conjur", "cyberark_pvwa", "infisical", "akeyless", "delinea_secret_server", "doppler",
