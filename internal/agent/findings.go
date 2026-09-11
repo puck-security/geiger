@@ -10,20 +10,25 @@ import (
 
 // Rendering a Surface into geiger's finding vocabulary.
 //
+// Density. A note is read by someone deciding what to look at, and the facts
+// they need are the server, the endpoint, the tools and the reach. Prose around
+// those facts pushes them off the line and repeats, run after run, what the
+// reader learned the first time. So a line here names things instead of
+// counting them, glosses a primitive in three words, and stops.
+//
 // Scoring discipline. Reading a config file tells you what an agent is wired
 // to. It does not tell you whether that is appropriate: a filesystem server
 // scoped to a project directory is the normal setup, and geiger has no way to
 // know from the file whether the machine it is on is a laptop or a build
-// runner. So the inventory carries no weight. The census line is the one
-// informational finding; capability lines, server lines and the evidence
-// caveat are context.
+// runner. So the inventory carries no weight.
 //
 // Weight is attached only where the config itself establishes something:
 //
 //   - a filesystem root that is broad (/ or $HOME) rather than scoped,
 //   - a chain, where several capabilities meet in one context (chains.go),
 //   - approval turned off, which removes the human from every chain at once,
-//   - a server observed answering with no credential, or reached over plaintext.
+//   - a server observed serving content with no credential, or reached over
+//     plaintext.
 //
 // This keeps an ordinary developer setup at INFO and reserves the top of the
 // scale for surfaces where the file says something specific went wrong.
@@ -31,28 +36,11 @@ import (
 // Findings renders the surface as note findings, worst first.
 func (s Surface) Findings() []module.Finding {
 	var out []module.Finding
-	out = append(out, s.inventoryFinding())
-
-	// Nothing about the servers' reach could be established. The capability,
-	// chain and per-server lines are all empty in that case, and four lines
-	// saying so in different words are worse than one, so stop here — the
-	// census line names the servers and the note's undetermined reason says
-	// what would change it. Two things still get reported: the approval posture,
-	// because prompts being off is a fact about the file rather than about what
-	// the servers reach, and what came back when a server was asked, because
-	// "nothing answered" is the answer to the reader's next question.
+	out = append(out, s.capabilityFindings()...)
+	out = append(out, s.chainFindings()...)
 	if f, ok := s.postureFinding(); ok {
 		out = append(out, f)
 	}
-	if s.Untypeable() {
-		if f, ok := s.enumerationFinding(); ok {
-			out = append(out, f)
-		}
-		out = append(out, s.exposureFindings()...)
-		return append(out, s.hookFindings()...)
-	}
-	out = append(out, s.capabilityFindings()...)
-	out = append(out, s.chainFindings()...)
 	out = append(out, s.serverFindings()...)
 	out = append(out, s.hookFindings()...)
 	out = append(out, s.evidenceFindings()...)
@@ -65,185 +53,149 @@ func (s Surface) Untypeable() bool {
 	return len(s.Servers) > 0 && s.Caps().Set().Empty()
 }
 
-// enumerationFinding reports what came back when the servers were asked.
-//
-// A note that says only "the reach is unknown" leaves the obvious question
-// unanswered: were they even running? geiger knows — it has the connection
-// error — and not saying so reads as if the flags did nothing. Servers that
-// were never asked (no --live, or a local server without --spawn-stdio) are not
-// reported here; the undetermined reason names the missing flag instead.
-func (s Surface) enumerationFinding() (module.Finding, bool) {
-	asked, answered := 0, 0
-	var detail []string
-	for _, srv := range s.Servers {
-		if !srv.Asked {
-			continue
+// capabilityFindings list the surface's total reach, one line per primitive:
+// a three-word gloss, then the servers and the tools that typed it.
+func (s Surface) capabilityFindings() []module.Finding {
+	caps := s.Caps().Sorted()
+	broad := s.Caps().BroadFS()
+	// Read and write at the same broad path are one fact. Mark the first line
+	// only, so a server that does both does not count twice.
+	marked := false
+	out := make([]module.Finding, 0, len(caps))
+	for _, c := range caps {
+		v := gloss(c.Cap, remoteFS(s, c.Cap))
+		if c.Scope != "" {
+			v += " (" + c.Scope + ")"
 		}
-		asked++
-		if srv.Enumerated {
-			answered++
-			continue
+		flag := module.FlagNone
+		if broad && (c.Cap == CapFSRead || c.Cap == CapFSWrite) && !marked {
+			v += " — whole disk or home, not one project"
+			flag, marked = c.Cap.Flag(true), true
 		}
-		detail = append(detail, srv.Name+": "+enumOutcome(srv))
+		src := capSources(s, c.Cap)
+		if len(src) > 0 {
+			v += " · " + capped(src, 3, "; ")
+		}
+		out = append(out, module.Finding{
+			Key:    c.Cap.Name(),
+			Value:  v,
+			Flag:   flag,
+			Detail: overflow(src, 3),
+		})
 	}
-	if asked == 0 {
-		return module.Finding{}, false
-	}
-	sort.Strings(detail)
-	v := fmt.Sprintf("%d of %s answered", answered, plural(asked, "server"))
-	if answered == 0 {
-		v += " — nothing is serving them right now. The agent still starts them when it needs them, " +
-			"so this bounds what geiger could confirm, not what the agent reaches"
-	}
-	return module.Finding{Key: "asked", Value: v, Flag: module.FlagNone, Detail: detail}, true
+	return out
 }
 
-// enumOutcome turns a transport error into something an operator can act on.
-// The exact error is already in the audit trail; what belongs in the note is
-// which of a handful of things went wrong.
-func enumOutcome(srv Server) string {
-	e := strings.ToLower(srv.EnumErr)
-	where := srv.URL
-	if where == "" {
-		where = strings.TrimSpace(srv.Command + " " + strings.Join(srv.Args, " "))
+// gloss is the primitive in a few words. Cap.Why is a sentence written for
+// someone meeting the word once; a note is read by someone who has met it
+// before, and the sentence costs the same space as the server and tool names
+// that are the actual news.
+func gloss(c Cap, remote bool) string {
+	if remote && (c == CapFSRead || c == CapFSWrite) {
+		// "local files" is false for a hosted server: get_file there reads the
+		// workspace at the other end of the wire, not this disk.
+		if c == CapFSRead {
+			return "reads server-side files"
+		}
+		return "writes server-side files"
 	}
-	switch {
-	case strings.Contains(e, "connection refused"):
-		return "nothing is listening on " + where
-	case strings.Contains(e, "no such host"), strings.Contains(e, "name resolution"):
-		return "the host in " + where + " does not resolve"
-	case strings.Contains(e, "executable file not found"), strings.Contains(e, "no such file"):
-		return "`" + where + "` is not installed on this machine"
-	case strings.Contains(e, "timeout"), strings.Contains(e, "deadline exceeded"), strings.Contains(e, "timed out"):
-		return "timed out"
-	case strings.Contains(e, "authentication required"):
-		return "the credential in this config was not accepted"
-	case strings.Contains(e, "certificate"), strings.Contains(e, "tls"):
-		return "TLS handshake failed"
-	case srv.EnumErr == "":
-		return "no tool list came back"
+	switch c {
+	case CapExec:
+		return "runs commands here"
+	case CapCorpusSearch:
+		return "bulk store read"
+	case CapSecretsRead:
+		return "reads a secret store"
+	case CapCodeWrite:
+		return "pushes code"
+	case CapCloudControl:
+		return "cloud control plane"
+	case CapDestructive:
+		return "deletes/terminates"
+	case CapIdentityAdmin:
+		return "writes to an IdP"
+	case CapFSRead:
+		return "reads local files"
+	case CapFSWrite:
+		return "writes local files"
+	case CapDataRead:
+		return "reads private data"
+	case CapNetEgress:
+		return "data out, caller picks the URL"
+	case CapUntrustedIn:
+		return "reads attacker-influenced content"
 	}
-	return srv.EnumErr
+	return c.Name()
 }
 
-// exposureFindings report the two conditions that are about a server itself
-// rather than about its reach, so they survive a surface nothing could be typed
-// on. Both need --live: no config says either.
-func (s Surface) exposureFindings() []module.Finding {
-	var out []module.Finding
+// remoteFS reports a filesystem primitive that comes only from remote servers,
+// whose files are on their own host rather than on this one.
+func remoteFS(s Surface, c Cap) bool {
+	if c != CapFSRead && c != CapFSWrite {
+		return false
+	}
+	seen := false
 	for _, srv := range s.Servers {
-		if srv.Unauthenticated {
-			out = append(out, module.Finding{
-				Key:    "open tool surface",
-				Value:  srv.Name + " answered tools/list with no credential, so anyone who can route to it has its tools",
-				Flag:   module.FlagForceMultiplier,
-				Detail: []string{srv.URL},
-			})
+		if !srv.Caps.Set().Has(c) {
+			continue
 		}
-		if srv.PlaintextHTTP {
-			out = append(out, module.Finding{
-				Key:    "plaintext",
-				Value:  srv.Name + " is reached over http, so its credential crosses the wire in clear",
-				Flag:   module.FlagWarn,
-				Detail: []string{srv.URL},
-			})
+		if srv.Transport != TransportHTTP {
+			return false
+		}
+		seen = true
+	}
+	return seen
+}
+
+// capSources names each server that supplies a primitive and, where the server
+// reported its own tool list, the tools that typed it.
+func capSources(s Surface, c Cap) []string {
+	var out []string
+	for _, srv := range s.Servers {
+		if !srv.Caps.Set().Has(c) {
+			continue
+		}
+		entry := srv.Name
+		if tools := toolsFor(srv, c); len(tools) > 0 {
+			entry += ": " + capped(tools, 3, ", ")
+		}
+		out = append(out, entry)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// toolsFor returns the enumerated tool names that typed a primitive on one
+// server. Capabilities read off a package name carry no tools, and the server
+// name alone is then the whole of what is known.
+func toolsFor(srv Server, c Cap) []string {
+	var out []string
+	for _, cp := range srv.Caps {
+		if cp.Cap != c {
+			continue
+		}
+		for _, e := range strings.Split(cp.Evidence, ", ") {
+			if t, ok := strings.CutPrefix(e, "tool:"); ok {
+				out = append(out, t)
+			}
 		}
 	}
 	return out
 }
 
-// evidenceFindings say how the reach above was established: read from the
-// config, or reported by the servers themselves. Only a flag that is not
-// already in use is named — telling someone to pass --live when they just did
-// reads like the tool did not notice.
-func (s Surface) evidenceFindings() []module.Finding {
-	if len(s.Servers) == 0 {
-		return nil
+// chainFindings report the compositions. The value is the path — which server
+// supplies which leg — because that is what an operator acts on.
+func (s Surface) chainFindings() []module.Finding {
+	chains := Chains(s)
+	out := make([]module.Finding, 0, len(chains))
+	for _, c := range chains {
+		out = append(out, module.Finding{
+			Key:   c.Name,
+			Value: c.Why,
+			Flag:  c.Flag,
+		})
 	}
-	enumerated, stdio := 0, 0
-	total := len(s.Servers)
-	for _, srv := range s.Servers {
-		if srv.Enumerated {
-			enumerated++
-		} else if srv.Transport == TransportStdio {
-			stdio++
-		}
-	}
-	if enumerated == total {
-		return []module.Finding{{
-			Key:   "evidence",
-			Value: fmt.Sprintf("observed: all %s reported their own tool list", plural(total, "server")),
-			Flag:  module.FlagNone,
-		}}
-	}
-	v := fmt.Sprintf("read from the config for %d of %d servers — what these packages are known to do, "+
-		"not what this install was seen doing", total-enumerated, total)
-	switch {
-	case !s.Live:
-		v += ". --live asks each server directly"
-	case stdio > 0 && !s.SpawnStdio:
-		v += fmt.Sprintf(". %d are local; --spawn-stdio runs each configured command to ask it", stdio)
-	}
-	return []module.Finding{{Key: "evidence", Value: v, Flag: module.FlagNone}}
-}
-
-// plural renders "1 server" / "3 servers".
-func plural(n int, word string) string {
-	if n == 1 {
-		return fmt.Sprintf("%d %s", n, word)
-	}
-	return fmt.Sprintf("%d %ss", n, word)
-}
-
-// inventoryFinding is the always-present census line. When nothing about the
-// servers could be typed it also names them, because the name and the command
-// are then the only facts there are and they are what the reader goes and looks
-// up.
-func (s Surface) inventoryFinding() module.Finding {
-	stdio, remote := 0, 0
-	for _, srv := range s.Servers {
-		if srv.Transport == TransportHTTP {
-			remote++
-		} else {
-			stdio++
-		}
-	}
-	v := fmt.Sprintf("%s wired to %s: %d local, %d remote",
-		plural(len(s.Servers), "MCP server"), s.Runtime, stdio, remote)
-	f := module.Finding{Key: "tool chain", Value: v, Flag: module.FlagInfo}
-	if s.Untypeable() {
-		names, detail := serverNamesAndLaunch(s)
-		f.Value = fmt.Sprintf("%s wired to %s (%s): %d local, %d remote",
-			plural(len(s.Servers), "MCP server"), s.Runtime, names, stdio, remote)
-		f.Detail = detail
-	}
-	return f
-}
-
-// serverNamesAndLaunch renders the server names for a one-line summary, capped
-// so a laptop with a dozen servers does not produce an unreadable line, plus the
-// full name-and-launch list for the detail.
-func serverNamesAndLaunch(s Surface) (string, []string) {
-	names := make([]string, 0, len(s.Servers))
-	detail := make([]string, 0, len(s.Servers))
-	for _, srv := range s.Servers {
-		names = append(names, srv.Name)
-		switch {
-		case srv.URL != "":
-			detail = append(detail, srv.Name+": "+srv.URL)
-		case srv.Command != "":
-			detail = append(detail, srv.Name+": "+strings.TrimSpace(srv.Command+" "+strings.Join(srv.Args, " ")))
-		default:
-			detail = append(detail, srv.Name+": no command or url in the config")
-		}
-	}
-	sort.Strings(names)
-	sort.Strings(detail)
-	const cap = 4
-	if len(names) > cap {
-		return fmt.Sprintf("%s and %d more", strings.Join(names[:cap], ", "), len(names)-cap), detail
-	}
-	return strings.Join(names, ", "), detail
+	return out
 }
 
 // postureFinding reports whether a human approves tool calls. This is not a
@@ -257,24 +209,20 @@ func (s Surface) postureFinding() (module.Finding, bool) {
 	}
 	var how []string
 	if s.SkipPermissions {
-		how = append(how, "prompts disabled for the whole runtime")
+		how = append(how, "runtime bypass")
 	}
 	if n := len(s.AllowRules); n > 0 {
-		how = append(how, fmt.Sprintf("%d blanket allow rule(s)", n))
+		how = append(how, plural(n, "allow rule"))
 	}
-	var perServer []string
 	for _, srv := range s.Servers {
 		if len(srv.AutoApproved) == 0 {
 			continue
 		}
 		if approvedAll(srv) {
-			perServer = append(perServer, srv.Name+" (all tools)")
+			how = append(how, srv.Name+" (all tools)")
 			continue
 		}
-		perServer = append(perServer, fmt.Sprintf("%s (%d tool(s))", srv.Name, len(autoApprovedTools(srv))))
-	}
-	if len(perServer) > 0 {
-		how = append(how, "pre-approved servers: "+strings.Join(perServer, ", "))
+		how = append(how, fmt.Sprintf("%s (%s)", srv.Name, plural(len(autoApprovedTools(srv)), "tool")))
 	}
 
 	// A chain with no prompt in front of it is the case worth the top weight:
@@ -287,8 +235,8 @@ func (s Surface) postureFinding() (module.Finding, bool) {
 		flag = module.FlagWarn
 	}
 	return module.Finding{
-		Key:    "approval",
-		Value:  "no prompt before a tool runs — " + strings.Join(how, "; "),
+		Key:    "no approval",
+		Value:  strings.Join(how, " · "),
 		Flag:   flag,
 		Detail: s.AllowRules,
 	}, true
@@ -304,131 +252,211 @@ func hasForceMultiplier(cs []Chain) bool {
 	return false
 }
 
-// capabilityFindings list the surface's total reach, one line per primitive,
-// each naming the servers that supply it. Inventory: see the note at the top of
-// this file for why these carry no weight.
-func (s Surface) capabilityFindings() []module.Finding {
-	caps := s.Caps().Sorted()
-	broad := s.Caps().BroadFS()
-	// Read and write at the same broad path are one fact. Mark the first line
-	// only, so a server that does both does not count twice.
-	marked := false
-	out := make([]module.Finding, 0, len(caps))
-	for _, c := range caps {
-		v := c.Cap.Why()
-		if c.Scope != "" {
-			v = "scope " + c.Scope + " — " + v
-		}
-		flag := module.FlagNone
-		if broad && (c.Cap == CapFSRead || c.Cap == CapFSWrite) && !marked {
-			v += " — anywhere on the disk or in the home directory, not one project"
-			flag, marked = c.Cap.Flag(true), true
-		}
-		out = append(out, module.Finding{
-			Key:    c.Cap.Name(),
-			Value:  v,
-			Flag:   flag,
-			Detail: serversWith(s, c.Cap),
-		})
-	}
-	return out
-}
-
-// chainFindings report the compositions.
-func (s Surface) chainFindings() []module.Finding {
-	chains := Chains(s)
-	out := make([]module.Finding, 0, len(chains))
-	for _, c := range chains {
-		out = append(out, module.Finding{
-			Key:    "chain: " + c.Name,
-			Value:  c.Why,
-			Flag:   c.Flag,
-			Detail: c.Via,
-		})
-	}
-	return out
-}
-
-// serverFindings list the servers. Servers with no identified reach are
-// collapsed into a count, the way --browser collapses narrow extensions: a long
-// list of harmless servers buries the two that matter.
+// serverFindings give a line per server: where it is, what came back, what it
+// reaches, and anything wrong with the server itself.
+//
+// Servers with nothing to report collapse into one line that names them, the
+// way --browser collapses narrow extensions: a long list of harmless servers
+// buries the two that matter. Narrow is the only state that collapses. A server
+// nothing could type is unknown reach rather than none, and a server that was
+// asked and never answered is neither — both keep their own line.
 func (s Surface) serverFindings() []module.Finding {
 	var out []module.Finding
-	var benign []string
+	var narrow []string
 	for _, srv := range s.Servers {
-		// No identified reach and nothing observed to contradict that. The
-		// enumeration note is not evidence either way — every local server that
-		// was not spawned carries one — so it does not keep a server off this
-		// list.
-		if srv.Caps.Set().Empty() && !srv.Unauthenticated && !srv.PlaintextHTTP {
-			benign = append(benign, srv.Name)
+		if isNarrow(srv) {
+			narrow = append(narrow, srv.Name+labelSuffix(srv))
 			continue
 		}
 		out = append(out, serverFinding(srv))
 	}
-	if len(benign) > 0 {
-		sort.Strings(benign)
+	if len(narrow) > 0 {
+		sort.Strings(narrow)
 		out = append(out, module.Finding{
-			Key:    "narrow servers",
-			Value:  plural(len(benign), "server") + " with no identified reach",
-			Flag:   module.FlagNone,
-			Detail: benign,
+			Key:   "no reach",
+			Value: strings.Join(narrow, " · "),
+			Flag:  module.FlagNone,
 		})
 	}
 	return out
 }
 
-// serverFinding renders one server. The line is inventory unless the server was
-// observed doing something a config cannot show: answering with no credential,
-// or being reached over plaintext http.
+// isNarrow reports a server that answered, or that the catalog knows, and
+// exposes no reach primitive.
+func isNarrow(srv Server) bool {
+	if !srv.Caps.Set().Empty() || srv.OpenSurface() || srv.PlaintextHTTP {
+		return false
+	}
+	if srv.Asked && !srv.Enumerated {
+		return false // it did not answer; that is not a clean bill of health
+	}
+	return srv.Enumerated || srv.Label != ""
+}
+
+// serverFinding renders one server: endpoint · state · reach · what is wrong.
 func serverFinding(srv Server) module.Finding {
-	var parts []string
-	if srv.Label != "" {
-		parts = append(parts, srv.Label)
-	}
-	parts = append(parts, string(srv.Transport))
-	if srv.Enumerated {
-		parts = append(parts, fmt.Sprintf("%d tools observed", len(srv.Tools)))
+	parts := []string{srvEndpoint(srv), srvState(srv)}
+	if names := srv.Caps.Set().Names(); len(names) > 0 {
+		parts = append(parts, strings.Join(names, ", "))
 	} else {
-		parts = append(parts, "not enumerated")
+		parts = append(parts, "reach unknown")
 	}
-	head := strings.Join(parts, ", ")
-
-	v := head + " — " + srv.Caps.Summary()
 	flag := module.FlagNone
-
-	detail := append([]string(nil), srv.Tools...)
-	if srv.Transport == TransportHTTP && srv.URL != "" {
-		detail = append(detail, "url: "+srv.URL)
-	}
-	if srv.Command != "" {
-		detail = append(detail, "command: "+strings.TrimSpace(srv.Command+" "+strings.Join(srv.Args, " ")))
-	}
-	if envs := srv.CredentialEnvNames(); len(envs) > 0 {
-		detail = append(detail, "inherits credentials from: "+strings.Join(envs, ", "))
-	}
-	if srv.EnumErr != "" {
-		detail = append(detail, "enumeration: "+srv.EnumErr)
-	}
-	if srv.ResourceCount > 0 || srv.PromptCount > 0 {
-		detail = append(detail, fmt.Sprintf("%d resources, %d prompts", srv.ResourceCount, srv.PromptCount))
-	}
-
-	if srv.Unauthenticated {
-		v += " — answers tools/list with no credential, so this tool surface is open to anyone who can route to it"
-		flag = module.FlagForceMultiplier
+	if srv.OpenSurface() {
+		parts = append(parts, openSurfaceWhy(srv))
+		flag = openSurfaceFlag(srv)
 	}
 	if srv.PlaintextHTTP {
-		v += " — reached over plaintext http, so its token crosses the wire in clear"
+		parts = append(parts, "cleartext http — the token crosses the wire in clear")
 		if flag < module.FlagWarn {
 			flag = module.FlagWarn
 		}
 	}
+
+	detail := append([]string(nil), srv.Tools...)
+	if envs := srv.CredentialEnvNames(); len(envs) > 0 {
+		detail = append(detail, "inherits credentials from: "+strings.Join(envs, ", "))
+	}
 	if srv.AuthServer != "" {
 		detail = append(detail, "authorization server: "+srv.AuthServer)
 	}
+	if srv.EnumErr != "" {
+		detail = append(detail, "enumeration: "+srv.EnumErr)
+	}
+	return module.Finding{Key: srv.Name, Value: strings.Join(parts, " · "), Flag: flag, Detail: detail}
+}
 
-	return module.Finding{Key: "server " + srv.Name, Value: v, Flag: flag, Detail: detail}
+// srvState says what came back, or why nothing did.
+//
+// "Not asked" is a third answer and the one that used to go missing. --live
+// asks every remote server over HTTP; a local one is only asked under
+// --spawn-stdio, because asking it means running the command in the config. A
+// reader who does not know that reads "not typed" as a failure. The remedy is
+// named once, on the evidence line.
+func srvState(srv Server) string {
+	switch {
+	case srv.Enumerated:
+		s := plural(len(srv.Tools), "tool")
+		if srv.ResourceCount > 0 {
+			s += ", " + plural(srv.ResourceCount, "resource")
+		}
+		if srv.PromptCount > 0 {
+			s += ", " + plural(srv.PromptCount, "prompt")
+		}
+		return s
+	case srv.Asked:
+		return enumOutcome(srv)
+	}
+	return "not asked"
+}
+
+// enumOutcome turns a transport error into something an operator can act on.
+// The exact error is already in the audit trail; what belongs in the note is
+// which of a handful of things went wrong.
+func enumOutcome(srv Server) string {
+	e := strings.ToLower(srv.EnumErr)
+	where := srv.URL
+	if where == "" {
+		where = strings.TrimSpace(srv.Command + " " + strings.Join(srv.Args, " "))
+	}
+	switch {
+	case strings.Contains(e, "connection refused"):
+		return "nothing listening"
+	case strings.Contains(e, "no such host"), strings.Contains(e, "name resolution"):
+		return "host does not resolve"
+	case strings.Contains(e, "executable file not found"), strings.Contains(e, "no such file"):
+		return "`" + where + "` not installed"
+	case strings.Contains(e, "timeout"), strings.Contains(e, "deadline exceeded"), strings.Contains(e, "timed out"):
+		return "timed out"
+	case strings.Contains(e, "authentication required"):
+		return "credential refused"
+	case strings.Contains(e, "certificate"), strings.Contains(e, "tls"):
+		return "TLS handshake failed"
+	case srv.EnumErr == "":
+		return "no tool list"
+	}
+	return "no tool list"
+}
+
+// labelSuffix adds the catalog's name for a server, unless that is what the
+// server is already called in the config.
+func labelSuffix(srv Server) string {
+	if srv.Label == "" || squash(srv.Label) == squash(srv.Name) {
+		return ""
+	}
+	return " (" + srv.Label + ")"
+}
+
+// squash reduces a name to its letters and digits, so "sequential-thinking" and
+// "sequential thinking" compare equal.
+func squash(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// srvEndpoint renders where a server is, in the form the reader would use to go
+// and look at it: the URL for a remote server, the launch command for a local
+// one.
+func srvEndpoint(srv Server) string {
+	if srv.Transport == TransportHTTP {
+		if srv.URL != "" {
+			return srv.URL
+		}
+		return "http, no url"
+	}
+	cmd := strings.TrimSpace(srv.Command + " " + strings.Join(srv.Args, " "))
+	if cmd == "" {
+		return "stdio, no command"
+	}
+	// The word says the transport, which says which flag reaches this server.
+	// A remote one shows a URL, and its scheme says the same thing.
+	return "stdio " + truncate(cmd, 52)
+}
+
+// truncate bounds a command line so one long argv does not push the reach off
+// the end of the line. The full string stays in the detail. It counts runes:
+// cutting a multi-byte character in half would produce a rune the renderer
+// drops, and the line would lose a character with nothing to show for it.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// openSurfaceKey and openSurfaceFlag separate the two cases. See Server.OpenData
+// for why a public tool list and readable content are not the same finding.
+func openSurfaceFlag(srv Server) module.FlagLevel {
+	if srv.OpenData() {
+		return module.FlagForceMultiplier
+	}
+	return module.FlagWarn
+}
+
+// openSurfaceWhy states what an unauthenticated answer means. geiger never
+// sends the credential in the config, so whatever came back was served to an
+// anonymous caller — the token in the file is not what gates it.
+//
+// What that is worth depends on what came back. Tool names say what the server
+// offers; geiger never calls a tool, so it cannot say whether a call needs the
+// key, and the line does not claim otherwise. Resources are the data itself.
+func openSurfaceWhy(srv Server) string {
+	if srv.OpenData() {
+		return fmt.Sprintf("OPEN: %s served to a request with no credential",
+			plural(srv.ResourceCount, "resource"))
+	}
+	why := "tool list public"
+	if len(srv.HeaderNames) > 0 {
+		why += " (" + strings.Join(srv.HeaderNames, ", ") + " not needed; calls untested)"
+		return why
+	}
+	return why + " (no credential sent; calls untested)"
 }
 
 // hookFindings list lifecycle shell commands and the instruction surface. A
@@ -440,13 +468,14 @@ func (s Surface) hookFindings() []module.Finding {
 	var out []module.Finding
 	if len(s.Hooks) > 0 {
 		detail := make([]string, 0, len(s.Hooks))
+		events := make([]string, 0, len(s.Hooks))
 		for _, h := range s.Hooks {
 			detail = append(detail, h.Event+": "+h.Command)
+			events = append(events, h.Event)
 		}
 		out = append(out, module.Finding{
-			Key: "hooks",
-			Value: fmt.Sprintf("%d hook(s) run shell commands when the agent hits a lifecycle event — "+
-				"no model and no approval in that path", len(s.Hooks)),
+			Key:    "hooks",
+			Value:  capped(events, 4, ", ") + " — shell on a lifecycle event, no model and no approval in that path",
 			Flag:   module.FlagInfo,
 			Detail: detail,
 		})
@@ -454,13 +483,88 @@ func (s Surface) hookFindings() []module.Finding {
 	if n := len(s.Skills) + len(s.Subagents); n > 0 {
 		detail := append(append([]string(nil), s.Skills...), s.Subagents...)
 		out = append(out, module.Finding{
-			Key:    "instruction surface",
-			Value:  fmt.Sprintf("%d skill(s)/subagent(s) load instructions the agent follows", n),
-			Flag:   module.FlagNone,
-			Detail: detail,
+			Key:     "instructions",
+			Value:   fmt.Sprintf("%d skill(s)/subagent(s) the agent loads and follows", n),
+			Flag:    module.FlagNone,
+			Detail:  detail,
+			Verbose: true,
 		})
 	}
 	return out
+}
+
+// evidenceFindings say how the reach above was established: enumerated from the
+// servers themselves, or read off the config. It names the servers rather than
+// counting them, and names the flag that would settle the rest — but only a
+// flag the reader has not already passed.
+func (s Surface) evidenceFindings() []module.Finding {
+	if len(s.Servers) == 0 {
+		return nil
+	}
+	var enumerated, fromConfig []string
+	stdio := 0
+	for _, srv := range s.Servers {
+		switch {
+		case srv.Enumerated:
+			enumerated = append(enumerated, srv.Name)
+		case !srv.Caps.Set().Empty():
+			// Its reach is geiger's reading of a package name. A server with no
+			// reach at all is already marked "not typed" on its own line.
+			fromConfig = append(fromConfig, srv.Name)
+		}
+		if !srv.Enumerated && srv.Transport == TransportStdio {
+			stdio++
+		}
+	}
+	var v []string
+	if len(enumerated) > 0 {
+		v = append(v, capped(enumerated, 4, ", ")+" enumerated")
+	}
+	if len(fromConfig) > 0 {
+		v = append(v, capped(fromConfig, 4, ", ")+" typed from the package name, not observed")
+	}
+	switch {
+	case len(s.Servers) == len(enumerated):
+	case !s.Live:
+		v = append(v, "--live asks the remote ones over http")
+		if stdio > 0 {
+			v = append(v, "--spawn-stdio runs "+plural(stdio, "local server")+" to ask")
+		}
+	case stdio > 0 && !s.SpawnStdio:
+		v = append(v, "--spawn-stdio runs "+plural(stdio, "local server")+" to ask (--live only asks remote ones)")
+	}
+	if len(v) == 0 {
+		return nil
+	}
+	return []module.Finding{{Key: "evidence", Value: strings.Join(v, " · "), Flag: module.FlagNone}}
+}
+
+// plural renders "1 server" / "3 servers".
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// capped joins a list, keeping the first n and counting the rest. What it drops
+// is in the finding's Detail, so nothing is lost — this only bounds the line an
+// operator reads first.
+func capped(items []string, n int, sep string) string {
+	if len(items) <= n {
+		return strings.Join(items, sep)
+	}
+	return fmt.Sprintf("%s%s+%d more", strings.Join(items[:n], sep), sep, len(items)-n)
+}
+
+// overflow returns the detail list for a capped line, and nothing when the line
+// already showed everything. A -v expansion that repeats the line above it is
+// noise dressed as evidence.
+func overflow(items []string, n int) []string {
+	if len(items) <= n {
+		return nil
+	}
+	return items
 }
 
 // Summarize builds the note and applies the Undetermined rule.
@@ -482,37 +586,37 @@ func (s Surface) hookFindings() []module.Finding {
 func (s Surface) Summarize(title string) module.Note {
 	fs := s.Findings()
 	n := module.Note{Title: title, Findings: fs, Summary: s.Summary()}
-	if len(s.Servers) > 0 && s.Caps().Set().Empty() {
+	if s.Untypeable() {
 		n.Undetermined = true
-		n.Reason = "servers are configured but none could be typed: no catalog entry, no recognizable " +
-			"arguments, and no tool list observed. Re-run with --live (and --spawn-stdio for local servers) " +
-			"to ask each server what it exposes"
+		n.Reason = "no catalog entry, no recognizable arguments, no tool list"
 	}
 	return n
 }
 
-// Summary is the one-line takeaway.
+// Summary is the one-line takeaway: runtime, size, worst reach.
 func (s Surface) Summary() string {
 	if len(s.Servers) == 0 {
-		return string(s.Runtime) + " config — no MCP servers configured"
+		return string(s.Runtime) + " — no MCP servers configured"
 	}
-	caps := s.Caps().Set()
-	worst := ""
-	for _, c := range allCaps {
-		if caps.Has(c) {
-			worst = c.Name()
-			break
+	stdio, remote := 0, 0
+	for _, srv := range s.Servers {
+		if srv.Transport == TransportHTTP {
+			remote++
+		} else {
+			stdio++
 		}
 	}
-	sum := fmt.Sprintf("%s agent surface — %s", s.Runtime, plural(len(s.Servers), "server"))
-	switch {
-	case worst != "":
-		sum += ", reaches " + worst
-	case s.Untypeable():
-		sum += ", reach unknown"
+	sum := fmt.Sprintf("%s · %s", s.Runtime, plural(len(s.Servers), "server"))
+	if stdio > 0 && remote > 0 {
+		sum += fmt.Sprintf(" (%d local, %d remote)", stdio, remote)
+	}
+	if names := s.Caps().Set().Names(); len(names) > 0 {
+		sum += " · " + capped(names, 4, ", ")
+	} else {
+		sum += " · reach unknown"
 	}
 	if s.AutoApproved() {
-		sum += ", auto-approved"
+		sum += " · no approval prompt"
 	}
 	return sum
 }

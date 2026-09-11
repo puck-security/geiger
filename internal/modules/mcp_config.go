@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -179,11 +180,12 @@ func recognizeMCPConfig(b parse.Blob, endpoint string, reg *module.Registry) []r
 	matches := []recognize.Match{{
 		Module: "mcp_config",
 		Fields: module.Fields{
-			surfaceField:   string(blob),
-			"server_count": strconv.Itoa(len(surface.Servers)),
-			"stdio_count":  strconv.Itoa(stdio),
-			"remote_count": strconv.Itoa(remote),
-			"secret_count": strconv.Itoa(len(embedded)),
+			surfaceField:    string(blob),
+			"server_count":  strconv.Itoa(len(surface.Servers)),
+			"stdio_count":   strconv.Itoa(stdio),
+			"remote_count":  strconv.Itoa(remote),
+			"secret_count":  strconv.Itoa(len(embedded)),
+			"secret_fields": secretFields(embedded),
 		},
 		Label: "agent surface [" + filepath.Base(b.File) + "]",
 	}}
@@ -191,6 +193,23 @@ func recognizeMCPConfig(b parse.Blob, endpoint string, reg *module.Registry) []r
 		matches = append(matches, retriageEmbedded(es, endpoint, reg)...)
 	}
 	return matches
+}
+
+// secretFields names where each inline credential sits, so the note points at
+// the lines to delete rather than counting them.
+func secretFields(es []embeddedSecret) string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(es))
+	for _, e := range es {
+		s := e.server + " " + e.name
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
 }
 
 // embeddedSecrets pulls every inline credential out of the server map.
@@ -290,7 +309,7 @@ func (m mcpConfig) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 
 	out := surface.Findings()
 	out = append(out, inlineSecretFindings(f)...)
-	out = append(out, module.Finding{Key: summaryKey, Value: surface.Summary()})
+	out = append(out, module.Finding{Key: summaryKey, Value: summaryLine(surface, out, f)})
 	// Undetermined only when nothing about the servers' reach could be
 	// established. A config that types cleanly is scored; see Surface.Summarize.
 	if surface.Untypeable() {
@@ -323,16 +342,40 @@ func enumerate(ctx context.Context, c *recon.Client, s *agent.Surface) {
 	}
 }
 
-// undeterminedReason explains what would establish the reach, naming the flag
-// that is actually missing rather than listing both every time.
-func undeterminedReason(c *recon.Client) string {
-	switch {
-	case !c.Live():
-		return "no catalog entry and nothing in the arguments. --live asks each server what it exposes"
-	case !c.SpawnStdio():
-		return "no catalog entry and nothing in the arguments. --spawn-stdio would run each configured command and ask it"
+// undeterminedReason says why nothing typed. Which flag would settle it is on
+// the evidence line, which names what each one covers; repeating it here said
+// the same thing twice on adjacent lines.
+func undeterminedReason(*recon.Client) string {
+	return "no catalog entry, nothing in the arguments, no tool list"
+}
+
+// summaryLine is the surface summary, plus where the tier came from when it did
+// not come from the reach. A capability list is inventory, so a note can carry
+// a page of reach and still owe its tier to the credentials in the file. The
+// reader should not have to diff the lines for a finding that is not there.
+func summaryLine(s agent.Surface, fs []module.Finding, f module.Fields) string {
+	sum := s.Summary()
+	n := f["secret_count"]
+	if n == "" || n == "0" || len(s.Servers) == 0 {
+		return sum
 	}
-	return "no catalog entry and nothing in the arguments"
+	for _, x := range fs {
+		if x.Key == "inline secrets" {
+			continue
+		}
+		if x.Flag == module.FlagWarn || x.Flag == module.FlagForceMultiplier {
+			return sum
+		}
+	}
+	return sum + " · tier from " + plural(n) + " in this file"
+}
+
+// plural renders "1 credential" / "2 credentials" from the counted field.
+func plural(n string) string {
+	if n == "1" {
+		return "1 credential"
+	}
+	return n + " credentials"
 }
 
 // inlineSecretFindings report the aggregator axis: credentials sitting in the
@@ -341,15 +384,23 @@ func inlineSecretFindings(f module.Fields) []module.Finding {
 	n := f["secret_count"]
 	if n == "" || n == "0" {
 		return []module.Finding{{
-			Key:   "inline secrets",
-			Value: "none in this file — the servers authenticate elsewhere. That does not bound the reach above.",
-			Flag:  module.FlagInfo,
+			Key:     "inline secrets",
+			Value:   "none — the servers authenticate elsewhere, which does not bound the reach above",
+			Flag:    module.FlagInfo,
+			Verbose: true,
 		}}
 	}
-	return []module.Finding{
-		{Key: "inline secrets", Value: n + " credential(s) embedded in this config — extracted and triaged separately below", Flag: fmFlag},
-		{Key: "aggregator", Value: "plaintext agent config: each token here drives an autonomous agent across every tool the server exposes — one file, the agent's whole keyring", Flag: fmFlag},
+	// One fact, one line. The count and what the count means were two findings
+	// flagged the same way, which is the same sentence twice.
+	v := plural(n) + " in plaintext"
+	if where := f["secret_fields"]; where != "" {
+		v += ": " + where
 	}
+	return []module.Finding{{
+		Key:   "inline secrets",
+		Value: v + " — each one an agent's whole keyring; triaged below",
+		Flag:  fmFlag,
+	}}
 }
 
 func (mcpConfig) Summarize(title string, fs []module.Finding) module.Note {

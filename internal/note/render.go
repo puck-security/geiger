@@ -74,14 +74,21 @@ func text(n module.Note, verbose bool) string {
 		}
 		return b.String()
 	}
-	// align keys
-	w := 0
+	// align keys over the lines that will actually print
+	shown := make([]module.Finding, 0, len(n.Findings))
 	for _, f := range n.Findings {
+		if f.Verbose && !verbose {
+			continue
+		}
+		shown = append(shown, f)
+	}
+	w := 0
+	for _, f := range shown {
 		if len(f.Key) > w {
 			w = len(f.Key)
 		}
 	}
-	for _, f := range n.Findings {
+	for _, f := range shown {
 		mark := markFor(f.Flag)
 		line := fmt.Sprintf("  %-*s : %s", w, sanitize(f.Key), sanitize(f.Value))
 		if mark != "" {

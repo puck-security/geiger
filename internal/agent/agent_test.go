@@ -146,18 +146,18 @@ func TestBroadPath(t *testing.T) {
 func TestChains(t *testing.T) {
 	s := parse(t, "mcp.json", noSecretsFixture)
 	cs := Chains(s)
-	for _, want := range []string{"lethal trifecta", "untrusted content next to wide reach", "package fetched fresh at every start"} {
+	for _, want := range []string{"lethal trifecta", "shared context", "unpinned package"} {
 		if !hasChain(cs, want) {
 			t.Errorf("missing chain %q; got %v", want, cs)
 		}
 	}
 
 	// The exec chain only when something actually runs code.
-	if hasChain(cs, "runs commands on this host") {
+	if hasChain(cs, "exec on this host") {
 		t.Error("no exec tool on this surface, so no exec chain")
 	}
 	sh := parse(t, "mcp.json", `{"mcpServers":{"sh":{"command":"uvx","args":["mcp-server-shell"]}}}`)
-	if !hasChain(Chains(sh), "runs commands on this host") {
+	if !hasChain(Chains(sh), "exec on this host") {
 		t.Error("a shell server must produce the exec chain")
 	}
 
@@ -270,7 +270,7 @@ func TestApprovalPosture(t *testing.T) {
 		if !s.AutoApproved() {
 			t.Errorf("auto-approval not detected in %s", raw)
 		}
-		f, ok := findingFor(s.Findings(), "approval")
+		f, ok := findingFor(s.Findings(), "no approval")
 		if !ok {
 			t.Fatalf("no approval finding for %s", raw)
 		}
@@ -307,7 +307,7 @@ func TestApprovalModeString(t *testing.T) {
 	if !s.SkipPermissions {
 		t.Fatal("permissions.defaultMode=bypassPermissions must count as no approval prompt")
 	}
-	f, ok := findingFor(s.Findings(), "approval")
+	f, ok := findingFor(s.Findings(), "no approval")
 	if !ok {
 		t.Fatal("no approval finding")
 	}
@@ -319,7 +319,7 @@ func TestApprovalModeString(t *testing.T) {
 	// With nothing behind it, the same setting is worth far less.
 	quiet := parse(t, "/home/u/.claude/settings.json",
 		`{"permissions":{"defaultMode":"bypassPermissions"},"mcpServers":{"clock":{"command":"npx","args":["-y","@modelcontextprotocol/server-time"]}}}`)
-	q, ok := findingFor(quiet.Findings(), "approval")
+	q, ok := findingFor(quiet.Findings(), "no approval")
 	if !ok {
 		t.Fatal("no approval finding")
 	}
@@ -381,11 +381,13 @@ func TestConfigTypedSurfaceIsScored(t *testing.T) {
 	if !ok {
 		t.Fatal("a config-typed surface must state how its reach was established")
 	}
-	if !strings.Contains(e.Value, "read from the config") || !strings.Contains(e.Value, "--live") {
+	if !strings.Contains(e.Value, "typed from the package name") || !strings.Contains(e.Value, "--live") {
 		t.Errorf("evidence should name the source and the way to confirm it: %q", e.Value)
 	}
-	if strings.Contains(e.Value, "--spawn-stdio") {
-		t.Errorf("--live has not been passed yet, so that is the flag to name first: %q", e.Value)
+	// Both flags are named before either has run, with what each one covers:
+	// which flag reaches which server is the thing readers get wrong.
+	if !strings.Contains(e.Value, "remote") || !strings.Contains(e.Value, "local") {
+		t.Errorf("evidence must say which flag covers which transport: %q", e.Value)
 	}
 
 	// Once --live has run, --spawn-stdio is the flag that is still missing.
@@ -427,8 +429,11 @@ func TestEnumeratedSurfaceReportsObservedEvidence(t *testing.T) {
 	if !ok {
 		t.Fatal("no evidence finding")
 	}
-	if !strings.Contains(e.Value, "observed") {
-		t.Errorf("a fully enumerated surface should report observed reach: %q", e.Value)
+	if !strings.Contains(e.Value, "sh enumerated") {
+		t.Errorf("a fully enumerated surface should name what reported: %q", e.Value)
+	}
+	if strings.Contains(e.Value, "package name") || strings.Contains(e.Value, "--") {
+		t.Errorf("nothing was read off the config, and no flag is missing: %q", e.Value)
 	}
 }
 
@@ -670,14 +675,18 @@ func TestUntypeableSurfaceReportsCompactly(t *testing.T) {
 		t.Fatal("fixture should type to nothing")
 	}
 	fs := s.Findings()
-	if len(fs) != 1 {
-		t.Fatalf("expected one line, got %d: %+v", len(fs), fs)
+	if len(fs) != 2 {
+		t.Fatalf("expected a server line and an evidence line, got %d: %+v", len(fs), fs)
 	}
-	if !strings.Contains(fs[0].Value, "mystery") {
-		t.Errorf("the census line must name the server it could not type: %q", fs[0].Value)
+	f, ok := findingFor(fs, "mystery")
+	if !ok {
+		t.Fatalf("the server needs a line of its own: %+v", fs)
 	}
-	if len(fs[0].Detail) != 1 || !strings.Contains(fs[0].Detail[0], "./some-unknown-binary") {
-		t.Errorf("the launch command belongs in the detail: %v", fs[0].Detail)
+	if !strings.Contains(f.Value, "./some-unknown-binary") || !strings.Contains(f.Value, "not asked") {
+		t.Errorf("the line must carry the command and the state: %q", f.Value)
+	}
+	if !strings.Contains(f.Value, "stdio") || !strings.Contains(f.Value, "reach unknown") {
+		t.Errorf("the line must say the transport and refuse to clear the server: %q", f.Value)
 	}
 	if !strings.Contains(s.Summary(), "reach unknown") {
 		t.Errorf("summary should say the reach is unknown: %q", s.Summary())
@@ -693,7 +702,7 @@ func TestApprovalIsReportedEvenWhenNothingTypes(t *testing.T) {
 	if !s.Untypeable() {
 		t.Fatal("fixture should type to nothing")
 	}
-	if _, ok := findingFor(s.Findings(), "approval"); !ok {
+	if _, ok := findingFor(s.Findings(), "no approval"); !ok {
 		t.Error("no approval finding on an untypeable surface")
 	}
 }
@@ -711,23 +720,21 @@ func TestAskedServersReportWhatCameBack(t *testing.T) {
 	s.Servers[0].EnumErr = `Post "http://10.0.0.9:8444/mcp": dial tcp: connect: connection refused`
 	s.Servers[1].EnumErr = `exec: "./some-unknown-binary": executable file not found in $PATH`
 
-	f, ok := findingFor(s.Findings(), "asked")
-	if !ok {
-		t.Fatal("a surface whose servers were asked must say what came back")
+	fs := s.Findings()
+	a, ok := findingFor(fs, "a")
+	if !ok || !strings.Contains(a.Value, "nothing listening") {
+		t.Errorf("a server that was asked must say what came back: %q", a.Value)
 	}
-	if !strings.Contains(f.Value, "0 of 2 servers answered") {
-		t.Errorf("the count belongs in the line: %q", f.Value)
-	}
-	joined := strings.Join(f.Detail, "\n")
-	if !strings.Contains(joined, "nothing is listening") || !strings.Contains(joined, "not installed on this machine") {
-		t.Errorf("each server needs a reason an operator can act on: %v", f.Detail)
+	b, ok := findingFor(fs, "b")
+	if !ok || !strings.Contains(b.Value, "not installed") {
+		t.Errorf("each reason has to be one an operator can act on: %q", b.Value)
 	}
 
-	// A server that was never asked is not reported here — the undetermined
-	// reason names the missing flag instead.
-	quiet := parse(t, "/home/u/.claude.json", `{"mcpServers":{"a":{"command":"./x"}}}`)
-	if _, ok := findingFor(quiet.Findings(), "asked"); ok {
-		t.Error("nothing was asked, so there is nothing to report")
+	// A server that was never asked says that instead of inventing a reason.
+	unasked := parse(t, "/home/u/.claude.json", `{"mcpServers":{"a":{"command":"./x"}}}`)
+	f, _ := findingFor(unasked.Findings(), "a")
+	if !strings.Contains(f.Value, "not asked") {
+		t.Errorf("a server nobody asked says so, rather than reading as a failure: %q", f.Value)
 	}
 }
 
@@ -747,7 +754,141 @@ func TestPlaintextIsAboutTheWireNotTheScheme(t *testing.T) {
 	if !remote.Untypeable() {
 		t.Fatal("fixture should type to nothing")
 	}
-	if _, ok := findingFor(remote.Findings(), "plaintext"); !ok {
-		t.Error("the plaintext finding must not be dropped with the reach lines")
+	f, ok := findingFor(remote.Findings(), "a")
+	if !ok || !strings.Contains(f.Value, "cleartext") {
+		t.Errorf("the plaintext fact must survive a surface with no reach: %q", f.Value)
+	}
+	if f.Flag != module.FlagWarn {
+		t.Errorf("plaintext to another host is a warn, got %v", f.Flag)
+	}
+}
+
+// "No identified reach" is a clean bill of health, and three different states
+// were getting it: a server that answered and exposes nothing, a server nothing
+// could type, and a server that was asked and never answered.
+func TestServerStatesAreNotCollapsedIntoOneBucket(t *testing.T) {
+	s := parse(t, "/home/u/.claude.json", `{"mcpServers":{
+		"quiet":{"url":"https://quiet.example.com/mcp"},
+		"clock":{"command":"npx","args":["-y","@modelcontextprotocol/server-time"]},
+		"mystery":{"command":"./some-unknown-binary"},
+		"wiki":{"command":"npx","args":["-y","mcp-atlassian"]}}}`)
+	// asked, answered, exposes nothing; asked, never answered; never asked.
+	for i := range s.Servers {
+		switch s.Servers[i].Name {
+		case "quiet":
+			s.Servers[i].Asked, s.Servers[i].Enumerated = true, true
+			s.Servers[i].Tools = []string{"ping"}
+		case "mystery":
+			s.Servers[i].Asked = true
+			s.Servers[i].EnumErr = `exec: "./some-unknown-binary": executable file not found in $PATH`
+		}
+	}
+	fs := s.Findings()
+
+	narrow, ok := findingFor(fs, "no reach")
+	if !ok {
+		t.Fatal("a server that answered with no reach primitive is narrow")
+	}
+	if !strings.Contains(narrow.Value, "quiet") || !strings.Contains(narrow.Value, "clock") {
+		t.Errorf("both the enumerated and the catalog-known server belong here: %q", narrow.Value)
+	}
+	if strings.Contains(narrow.Value, "mystery") {
+		t.Errorf("a server that never answered is not narrow: %q", narrow.Value)
+	}
+
+	m, ok := findingFor(fs, "mystery")
+	if !ok || !strings.Contains(m.Value, "not installed") {
+		t.Errorf("a server that was asked and failed keeps its own line: %q", m.Value)
+	}
+
+	// And the surface types, so this all has to survive the non-Untypeable path.
+	if s.Untypeable() {
+		t.Fatal("fixture should type through the wiki server")
+	}
+}
+
+// A server nothing could type is unknown reach, not no reach.
+func TestUntypedServersSayUnknownRatherThanNarrow(t *testing.T) {
+	s := parse(t, "/home/u/.claude.json", `{"mcpServers":{
+		"mystery":{"command":"./some-unknown-binary"},
+		"wiki":{"command":"npx","args":["-y","mcp-atlassian"]}}}`)
+	f, ok := findingFor(s.Findings(), "mystery")
+	if !ok {
+		t.Fatal("an untyped server needs a line of its own")
+	}
+	if !strings.Contains(f.Value, "reach unknown") {
+		t.Errorf("the line must refuse to clear a server nothing typed: %q", f.Value)
+	}
+	if n, _ := findingFor(s.Findings(), "no reach"); strings.Contains(n.Value, "mystery") {
+		t.Errorf("untyped is unknown reach, not none: %q", n.Value)
+	}
+}
+
+// A capability with no source named is a claim the reader cannot check.
+func TestCapabilityLinesNameTheServerAndTools(t *testing.T) {
+	s := parse(t, "/home/u/.claude.json", `{"mcpServers":{"wiki":{"url":"https://wiki.example.com/mcp"}}}`)
+	applyEnumeration(&s.Servers[0], []Tool{
+		{Name: "search_pages", Description: "search all pages"},
+		{Name: "query_spaces", Description: "query across spaces"},
+	})
+	f, ok := findingFor(s.Findings(), "corpus-search")
+	if !ok {
+		t.Fatal("no corpus-search line")
+	}
+	if !strings.Contains(f.Value, "wiki") {
+		t.Errorf("the line must say which server: %q", f.Value)
+	}
+	if !strings.Contains(f.Value, "search_pages") || !strings.Contains(f.Value, "query_spaces") {
+		t.Errorf("the server's own tool names are the evidence: %q", f.Value)
+	}
+}
+
+// geiger never sends the credential in the config, so a tool list that comes
+// back was served to an anonymous caller — whatever the config holds.
+func TestOpenSurfaceDoesNotDependOnWhatTheConfigHolds(t *testing.T) {
+	withKey := Server{
+		Name: "remote", Transport: TransportHTTP, URL: "https://mcp.example.com/mcp",
+		HeaderNames: []string{"X-Api-Key"}, Unauthenticated: true, Enumerated: true,
+		Tools: []string{"search_docs"},
+	}
+	if !withKey.OpenSurface() {
+		t.Fatal("an API key in the file does not gate a server that answers without it")
+	}
+	s := Surface{Runtime: "Claude Code", Servers: []Server{withKey}}
+	s.Servers[0].Caps = s.Servers[0].Caps.Add(Capability{Cap: CapCorpusSearch, Evidence: "tool:search_docs"})
+	f, ok := findingFor(s.Findings(), "remote")
+	if !ok {
+		t.Fatal("no server line")
+	}
+	// A public tool list says what the server offers, not that anyone can use
+	// it: geiger never calls a tool, so it cannot claim the calls are open.
+	if f.Flag != module.FlagWarn {
+		t.Errorf("a public tool list is a warn, got %v", f.Flag)
+	}
+	if !strings.Contains(f.Value, "X-Api-Key") {
+		t.Errorf("say that the credential in the file was not needed: %q", f.Value)
+	}
+
+	// Resources are the data itself, and they came back to the same
+	// credential-free request. That is the force multiplier.
+	withData := withKey
+	withData.ResourceCount = 3
+	if !withData.OpenData() {
+		t.Fatal("content served to an anonymous caller is an open surface")
+	}
+	ds := Surface{Runtime: "Claude Code", Servers: []Server{withData}}
+	ds.Servers[0].Caps = ds.Servers[0].Caps.Add(Capability{Cap: CapCorpusSearch, Evidence: "tool:search_docs"})
+	df, ok := findingFor(ds.Findings(), "remote")
+	if !ok {
+		t.Fatal("no server line")
+	}
+	if df.Flag != module.FlagForceMultiplier {
+		t.Errorf("readable content with no credential is a force multiplier, got %v", df.Flag)
+	}
+
+	// A server on loopback is the normal way to run one.
+	local := Server{Name: "local", Transport: TransportHTTP, URL: "http://127.0.0.1:8771/mcp", Unauthenticated: true, Enumerated: true}
+	if local.OpenSurface() {
+		t.Error("loopback is not a surface anyone can route to")
 	}
 }

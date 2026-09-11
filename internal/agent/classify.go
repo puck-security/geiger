@@ -88,12 +88,12 @@ func ClassifyTools(tools []Tool) (Caps, int) {
 	return demoteRedundantDataRead(out), unclassified
 }
 
-// demoteRedundantDataRead drops the generic data-read primitive when the
-// stronger corpus-search primitive is already present from the same server.
-// Every corpus search is also a read; reporting both adds a warn line that says
-// nothing the force multiplier above it did not already say.
+// demoteRedundantDataRead drops the generic data-read primitive when a stronger
+// one already covers the same tools. Every corpus search is also a read, and a
+// tool named read_file types as both fs-read and data-read — reporting both
+// gives the reader two lines that name one tool.
 func demoteRedundantDataRead(cs Caps) Caps {
-	if !cs.Set().Has(CapCorpusSearch) {
+	if !cs.Set().Has(CapCorpusSearch) && !coveredByFS(cs) {
 		return cs
 	}
 	out := make(Caps, 0, len(cs))
@@ -104,6 +104,29 @@ func demoteRedundantDataRead(cs Caps) Caps {
 		out = append(out, c)
 	}
 	return out
+}
+
+// coveredByFS reports that every tool behind data-read is already behind a
+// filesystem primitive on the same server, which is the read_file case.
+func coveredByFS(cs Caps) bool {
+	var data, fs string
+	for _, c := range cs {
+		switch c.Cap {
+		case CapDataRead:
+			data = c.Evidence
+		case CapFSRead, CapFSWrite:
+			fs += " " + c.Evidence
+		}
+	}
+	if data == "" || strings.TrimSpace(fs) == "" {
+		return false
+	}
+	for _, e := range strings.Split(data, ", ") {
+		if e != "" && !strings.Contains(fs, e) {
+			return false
+		}
+	}
+	return true
 }
 
 // ToolNames returns just the names, for the note's detail expansion.

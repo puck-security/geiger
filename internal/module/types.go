@@ -161,6 +161,12 @@ type Finding struct {
 	// individual file paths behind "8 editor local-history snapshots"). The
 	// terminal shows it only with -v; JSON always emits it. Optional.
 	Detail []string
+	// Verbose marks a line as the breakdown behind another line rather than a
+	// fact of its own: a per-server repeat of a capability already reported, a
+	// list of servers a count already gave. The terminal prints it only with
+	// -v; JSON always emits it. A line carrying a flag is never Verbose — a
+	// reader must not have to ask twice to see something that scored.
+	Verbose bool
 }
 
 // ExposureKey is the finding key recording WHERE a credential was exposed.

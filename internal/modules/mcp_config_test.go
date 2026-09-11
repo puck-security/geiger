@@ -84,11 +84,19 @@ func TestMCPConfigAggregatorFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := indexByKey(fs)
-	if idx["aggregator"].Flag != module.FlagForceMultiplier {
-		t.Errorf("aggregator should be a force multiplier: %+v", idx["aggregator"])
+	f := idx["inline secrets"]
+	if f.Flag != module.FlagForceMultiplier {
+		t.Errorf("inline secrets should be a force multiplier: %+v", f)
 	}
-	if idx["inline secrets"].Flag != module.FlagForceMultiplier {
-		t.Errorf("inline secrets should be a force multiplier: %+v", idx["inline secrets"])
+	// The count and what the count means are one line, and the line names the
+	// fields to go and delete rather than counting them.
+	for _, want := range []string{"tools MISTRAL_API_KEY", "remote Authorization", "keyring"} {
+		if !strings.Contains(f.Value, want) {
+			t.Errorf("inline-secrets line missing %q: %q", want, f.Value)
+		}
+	}
+	if _, ok := idx["aggregator"]; ok {
+		t.Error("the aggregator point belongs on the inline-secrets line, not a second one")
 	}
 	if mod.Summarize("t", fs).Invalid {
 		t.Error("MCP config note must not be marked dead")
@@ -153,7 +161,7 @@ func TestMCPConfigScoresReachWithoutAnySecret(t *testing.T) {
 			t.Errorf("missing finding %q — reach must be reported independently of secrets", key)
 		}
 	}
-	f, ok := idx["chain: lethal trifecta"]
+	f, ok := idx["lethal trifecta"]
 	if !ok {
 		t.Fatal("missing the trifecta chain — reach must be reported independently of secrets")
 	}
@@ -172,7 +180,7 @@ func TestMCPConfigScoresReachWithoutAnySecret(t *testing.T) {
 	}
 	if e, ok := findingFor(n.Findings, "evidence"); !ok {
 		t.Error("the note must state how the reach was established")
-	} else if !strings.Contains(e.Value, "read from the config") {
+	} else if !strings.Contains(e.Value, "typed from the package name") {
 		t.Errorf("evidence should name the config as the source: %q", e.Value)
 	}
 	// The sentinels must not leak into the printed findings.
@@ -233,5 +241,43 @@ func TestMCPConfigUntypeableSurfaceIsUndetermined(t *testing.T) {
 	}
 	if n.Reason == "" {
 		t.Error("an Undetermined note must say why")
+	}
+}
+
+// A note can carry a page of reach and still owe its tier to the credentials in
+// the file. Saying which is shorter than making the reader work it out.
+func TestMCPConfigSaysWhenTheReachIsNotTheProblem(t *testing.T) {
+	// One wiki server: typed to bulk read, with nothing to compose it with. The
+	// tier comes from the key sitting next to it in the file.
+	raw := `{"mcpServers":{"wiki":{"command":"uvx","args":["mcp-atlassian"],
+		"env":{"MISTRAL_API_KEY":"MistralKey1234567890abcdefGHIJKL"}}}}`
+	b := parse.Parse(raw, "/home/u/.claude.json")
+	agg := modulesOf(recognize.Recognize(b, "", module.Default))["mcp_config"]
+	if agg.Fields["secret_count"] == "0" {
+		t.Fatal("fixture must carry an inline secret")
+	}
+
+	mod, _ := module.Default.ByName("mcp_config")
+	fs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, agg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := indexByKey(fs)[summaryKey].Value
+	if !strings.Contains(sum, "tier from 1 credential") {
+		t.Errorf("the summary must name what the tier came from: %q", sum)
+	}
+
+	// A surface that does compose keeps quiet: the chain finding says it.
+	chained := `{"mcpServers":{
+		"wiki": {"command":"uvx","args":["mcp-atlassian"]},
+		"web":  {"command":"npx","args":["-y","@modelcontextprotocol/server-fetch"]}}}`
+	cb := parse.Parse(chained, "/home/u/.claude.json")
+	cagg := modulesOf(recognize.Recognize(cb, "", module.Default))["mcp_config"]
+	cfs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, cagg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(indexByKey(cfs)[summaryKey].Value, "tier from") {
+		t.Error("the chain finding already says the reach is the problem")
 	}
 }

@@ -49,8 +49,8 @@ func Chains(s Surface) []Chain {
 	if trifecta {
 		out = append(out, Chain{
 			Name: "lethal trifecta",
-			Why: "the agent can read untrusted content, read private data, and send data out. " +
-				"One poisoned page, issue, or ticket is enough to make it leak what it can read.",
+			Why: chainPath(s, CapUntrustedIn, firstOf(set, CapCorpusSearch, CapSecretsRead, CapDataRead, CapFSRead),
+				firstOf(set, CapNetEgress, CapCodeWrite)) + " — one poisoned page leaks what the agent can read",
 			Via:  serversWith(s, CapUntrustedIn, CapCorpusSearch, CapSecretsRead, CapDataRead, CapFSRead, CapNetEgress, CapCodeWrite),
 			Flag: module.FlagForceMultiplier,
 		})
@@ -64,8 +64,7 @@ func Chains(s Surface) []Chain {
 	if !trifecta && set.Has(CapCorpusSearch) && set.HasAny(CapNetEgress, CapCodeWrite) {
 		out = append(out, Chain{
 			Name: "bulk read plus a way out",
-			Why: "the agent can search a whole document store and can also send data out. " +
-				"One search and one send is the whole path.",
+			Why:  chainPath(s, CapCorpusSearch, firstOf(set, CapNetEgress, CapCodeWrite)) + " — one search, one send",
 			Via:  serversWith(s, CapCorpusSearch, CapNetEgress, CapCodeWrite),
 			Flag: module.FlagForceMultiplier,
 		})
@@ -76,9 +75,8 @@ func Chains(s Surface) []Chain {
 	// run, and every network path the host has.
 	if set.Has(CapExec) {
 		out = append(out, Chain{
-			Name: "runs commands on this host",
-			Why: "a tool runs commands here, so the agent reaches whatever this host reaches — " +
-				"the other findings in this run included",
+			Name: "exec on this host",
+			Why:  chainPath(s, CapExec) + " — agent reach is host reach, this run's other findings included",
 			Via:  serversWith(s, CapExec),
 			Flag: module.FlagForceMultiplier,
 		})
@@ -89,7 +87,7 @@ func Chains(s Surface) []Chain {
 	if set.Has(CapSecretsRead) {
 		out = append(out, Chain{
 			Name: "reads a secret store",
-			Why:  "a tool reads stored credentials, so access to the agent becomes access to whatever those credentials open, after the session ends",
+			Why:  chainPath(s, CapSecretsRead) + " — agent access outlives the session as whatever those credentials open",
 			Via:  serversWith(s, CapSecretsRead),
 			Flag: module.FlagForceMultiplier,
 		})
@@ -102,9 +100,9 @@ func Chains(s Surface) []Chain {
 	// and a different tool's job; the pairing is ours.
 	if lo, hi := shadowPair(s); lo != "" && hi != "" {
 		out = append(out, Chain{
-			Name: "untrusted content next to wide reach",
-			Why: lo + " reads untrusted content and " + hi + " has wide reach. " +
-				"They share one context, so text returned by the first is read by the model that calls the second.",
+			Name: "shared context",
+			Why: lo + " (untrusted-in) shares a context with " + hi + " — " +
+				"text the first returns is read by the model that calls the second",
 			Via:  []string{lo, hi},
 			Flag: module.FlagInfo,
 		})
@@ -120,15 +118,64 @@ func Chains(s Surface) []Chain {
 			flag = module.FlagWarn
 		}
 		out = append(out, Chain{
-			Name: "package fetched fresh at every start",
-			Why: strings.Join(un, ", ") + " refetch their package each time they launch, " +
-				"so the code that runs tomorrow need not be the code in this config",
+			Name: "unpinned package",
+			Why:  strings.Join(un, ", ") + " — " + refetch(len(un)) + " at launch, so tomorrow's code need not be this config's",
 			Via:  un,
 			Flag: flag,
 		})
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Flag > out[j].Flag })
+	return out
+}
+
+// refetch agrees the verb with the number of unpinned servers.
+func refetch(n int) string {
+	if n == 1 {
+		return "refetches its package"
+	}
+	return "refetch their packages"
+}
+
+// chainPath renders a chain as the legs that make it: which server supplies which
+// primitive, in the order the data moves. That is the fact an operator acts on;
+// the sentence explaining what a trifecta is belongs in the docs, not in every
+// run of every scan.
+func chainPath(s Surface, caps ...Cap) string {
+	legs := make([]string, 0, len(caps))
+	for _, c := range caps {
+		if c == 0 {
+			continue
+		}
+		names := serverNamesWith(s, c)
+		if len(names) == 0 {
+			continue
+		}
+		legs = append(legs, c.Name()+" "+strings.Join(names, ", "))
+	}
+	return strings.Join(legs, " → ")
+}
+
+// firstOf returns the first primitive the set actually has, so a chain names the
+// leg that is present rather than every one it would accept.
+func firstOf(set Set, cs ...Cap) Cap {
+	for _, c := range cs {
+		if set.Has(c) {
+			return c
+		}
+	}
+	return 0
+}
+
+// serverNamesWith names the servers supplying one primitive.
+func serverNamesWith(s Surface, c Cap) []string {
+	var out []string
+	for _, srv := range s.Servers {
+		if srv.Caps.Set().Has(c) {
+			out = append(out, srv.Name)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
