@@ -262,6 +262,12 @@ type mcpConfig struct{ module.Base }
 
 func (mcpConfig) Name() string { return "mcp_config" }
 
+// TypesOffline: the reach of an agent surface is read off the config file. The
+// dry-run note would otherwise be a preview of enumeration calls and nothing
+// else, which is the default mode reporting nothing about a file it has fully
+// understood. --live sharpens the typing; it does not produce it.
+func (mcpConfig) TypesOffline() bool { return true }
+
 // EndpointPolicy: an MCP server is deployable at any domain, and the URL in the
 // config is the one the agent itself already trusts and calls. Pinning would
 // break every legitimate deployment. The destination is instead made visible in

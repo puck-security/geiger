@@ -334,3 +334,45 @@ func TestUnverifiedDestinationSilentForVendorPinnedHost(t *testing.T) {
 		t.Errorf("a vendor-pinned host is verified: %+v", got)
 	}
 }
+
+// A module that types from the file, not from a response, keeps its findings in
+// dry-run. Replacing them with a preview of the calls it would have made is the
+// default mode reporting nothing about a file it has fully read.
+type fakeOffline struct{ fakeBearer }
+
+func (fakeOffline) Name() string       { return "offline" }
+func (fakeOffline) TypesOffline() bool { return true }
+func (fakeOffline) Summarize(title string, fs []module.Finding) module.Note {
+	return module.Note{Title: title, Findings: fs}
+}
+
+func TestDryRunKeepsFindingsFromAModuleThatTypesOffline(t *testing.T) {
+	reg := module.NewRegistry()
+	reg.Register(fakeBearer{})
+	reg.Register(fakeOffline{})
+	reg.MapRule("__never__", "fake")
+	recognize.RegisterRecognizer(func(b parse.Blob, _ string, _ *module.Registry) []recognize.Match {
+		if v := b.Vars["OFFLINE_TOKEN"]; v != "" {
+			return []recognize.Match{{Module: "offline", Fields: module.Fields{"token": v}, Secret: v, Label: "OFFLINE_TOKEN"}}
+		}
+		return nil
+	})
+
+	b := parse.Parse("OFFLINE_TOKEN=supersecretvalue54321\n", ".env")
+	var got *Result
+	for _, r := range Run(b, reg, Options{Live: false}) {
+		if strings.Contains(r.Note.Title, "offline") {
+			got = &r
+		}
+	}
+	if got == nil {
+		t.Fatal("offline module not run")
+	}
+	if len(got.Note.Findings) == 0 {
+		t.Error("a module that types offline must keep its findings in dry-run")
+	}
+	// The call preview is still recorded: --live would make it.
+	if len(got.Planned) != 1 {
+		t.Errorf("planned calls must still be recorded, got %d", len(got.Planned))
+	}
+}

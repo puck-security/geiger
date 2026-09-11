@@ -473,7 +473,10 @@ func runOne(b parse.Blob, reg *module.Registry, opts Options, m recognize.Match)
 	planned := client.Planned()
 	// In dry-run, network modules return no findings (responses are synthetic),
 	// so don't render them as "invalid" — present the planned read-only calls.
-	if !opts.Live && len(planned) > 0 {
+	// A module that types offline is exempt: its findings are read off the file
+	// and stand without a single response, and replacing them with a call
+	// preview would hide the whole analysis in the default mode.
+	if !opts.Live && len(planned) > 0 && !typesOffline(mod) {
 		n := dryRunNote(title, len(planned))
 		if w := unverifiedDestination(mod, m.Fields, opts.Endpoint); w != nil {
 			n.Findings = append(n.Findings, *w)
@@ -576,6 +579,12 @@ func unverifiedDestination(mod module.Module, f module.Fields, flagEndpoint stri
 		Value: host + " — self-hosted service, so this host came from the scanned file and is not vendor-verified; confirm it before --live",
 		Flag:  module.FlagWarn,
 	}
+}
+
+// typesOffline reports whether a module's findings survive a dry-run.
+func typesOffline(mod module.Module) bool {
+	t, ok := mod.(module.OfflineTyper)
+	return ok && t.TypesOffline()
 }
 
 func dryRunNote(title string, n int) module.Note {
