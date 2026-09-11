@@ -11,6 +11,7 @@ import (
 
 	gmodule "github.com/puck-security/geiger/internal/module"
 	"github.com/puck-security/geiger/internal/pipeline"
+	"github.com/puck-security/geiger/internal/recon"
 	"github.com/puck-security/geiger/internal/score"
 )
 
@@ -337,5 +338,42 @@ func TestOutputToFile(t *testing.T) {
 	}
 	if fi, _ := os.Stat(outPath); fi.Mode().Perm() != 0o600 {
 		t.Errorf("output file perms = %v, want 0600", fi.Mode().Perm())
+	}
+}
+
+// A live run's curl block is a record of calls already made. Printing two of
+// seven says nothing an operator can replay, so the default is the count and
+// -v is the whole trail.
+func TestPrintCallsCountsByDefaultAndExpandsVerbatim(t *testing.T) {
+	calls := []recon.PlannedCall{
+		{Method: "POST", URL: "https://a.example.com/mcp", Note: "mcp tools/list"},
+		{Method: "POST", URL: "https://b.example.com/mcp"},
+		{Method: "POST", URL: "https://c.example.com/mcp"},
+	}
+	var short bytes.Buffer
+	printCalls(&short, calls, false, true)
+	if !strings.Contains(short.String(), "3 read-only calls made") {
+		t.Errorf("default output should be the count: %q", short.String())
+	}
+	if strings.Contains(short.String(), "curl") {
+		t.Errorf("default output should not print commands: %q", short.String())
+	}
+
+	// Dry-run is the same line, in the tense of a thing that has not happened.
+	var dry bytes.Buffer
+	printCalls(&dry, calls, false, false)
+	if !strings.Contains(dry.String(), "3 read-only calls planned") || strings.Contains(dry.String(), "curl") {
+		t.Errorf("a dry-run without -v should count, not print: %q", dry.String())
+	}
+
+	var full bytes.Buffer
+	printCalls(&full, calls, true, false)
+	for _, want := range []string{"a.example.com", "b.example.com", "c.example.com"} {
+		if !strings.Contains(full.String(), want) {
+			t.Errorf("expanded output dropped %s:\n%s", want, full.String())
+		}
+	}
+	if strings.Contains(full.String(), "more read-only call") {
+		t.Errorf("nothing may be truncated when expanded:\n%s", full.String())
 	}
 }
