@@ -117,12 +117,17 @@ func EnumerateRemote(ctx context.Context, c *recon.Client, s *Server) {
 	}
 	applyEnumeration(s, tools)
 
-	// The credential that reached the server is the one in the config. If we
-	// sent none and still got a tool list, the surface is open to anyone who can
-	// route to it — a finding in its own right, independent of any credential.
-	if len(s.HeaderNames) == 0 {
-		s.Unauthenticated = true
-	}
+	// geiger sends no credential, ever: rpc() sets a content type, an accept
+	// header and the protocol version, and nothing from the config. So a tool
+	// list that came back was served to an anonymous caller — the token in the
+	// config is not what gates this server. Keying this off "the config has no
+	// auth header" instead, as it once did, suppressed the finding in exactly
+	// the case that matters: a server holding an API key in the file, answering
+	// without being asked for it.
+	//
+	// This records what happened; Server.OpenSurface decides whether it is
+	// worth reporting, and stands the finding down for a server on loopback.
+	s.Unauthenticated = true
 
 	// Resource and prompt counts size the reachable content behind the tools.
 	if raw, err := rpc(ctx, c, s.URL, "resources/list", nil, protoStateless); err == nil {

@@ -82,6 +82,32 @@ type Server struct {
 	AuthServer string
 }
 
+// OpenSurface reports an unauthenticated tool surface worth reporting: the
+// server answered geiger's credential-free request, and it is not on this
+// machine.
+//
+// Loopback stands the finding down for the same reason cleartext to loopback
+// does. A server on 127.0.0.1 is the normal way to run one, "anyone who can
+// route to it" there is a process already on the host, and reporting it would
+// put every developer laptop at the top of the scale.
+func (s Server) OpenSurface() bool {
+	return s.Unauthenticated && s.Transport == TransportHTTP && offHost(s.URL)
+}
+
+// OpenData reports the stronger case: the server served CONTENT, not just the
+// names of its tools, to the same credential-free request.
+//
+// The distinction decides the weight. A hosted MCP endpoint commonly publishes
+// its tool list on purpose and gates the calls, and geiger cannot tell the
+// difference — it never issues tools/call, which is the line between
+// enumerating reach and exercising it. So a public tool list is a warn: it says
+// what the server offers, not that anyone can use it. Resources are the other
+// case. They are the data itself, and they came back to a caller with no
+// credential at all.
+func (s Server) OpenData() bool {
+	return s.OpenSurface() && s.ResourceCount > 0
+}
+
 // Invocation is the lowercased string the catalog matches against: the command
 // and arguments for a stdio server, the host and path for a remote one.
 func (s Server) Invocation() string {
@@ -140,9 +166,14 @@ func plaintextOffHost(raw string) bool {
 	if !strings.HasPrefix(strings.ToLower(raw), "http://") {
 		return false
 	}
+	return offHost(raw)
+}
+
+// offHost reports whether a URL points somewhere other than this machine.
+func offHost(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return true // unparseable but cleartext: assume the worse case
+		return true // unparseable: assume the worse case
 	}
 	return !loopbackHosts[strings.ToLower(u.Hostname())]
 }
