@@ -447,6 +447,7 @@ a force multiplier; a billed-usage API key is a warning.
 | `bedrock` | Amazon Bedrock API key — foundation-model access (billable) |
 | `mcp_config` | agent tool chain — what the agent reaches through its MCP servers, hooks, and approval posture |
 | `ai_ide_store` | AI-IDE token store (plaintext SQLite) |
+| `projectdiscovery_neo` | Neo key — reads this account's assessments and can launch new ones |
 
 **Secrets managers & vaults**
 
