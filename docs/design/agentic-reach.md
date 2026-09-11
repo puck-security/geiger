@@ -189,7 +189,7 @@ comes from — see section 5.
    `code-write`). Search the store, send the results out. Two tool calls, no
    exploit. Stands down when the trifecta already covers the same servers, so
    one fact is not counted twice. *Force multiplier.*
-3. **Runs commands on this host** — any `exec` tool means agent reach = host
+3. **Exec on this host** — any `exec` tool means agent reach = host
    reach = every credential on the host, including the other findings in the same
    run. *Force multiplier.*
 4. **Reads a secret store** — `secrets-read` yields a credential, which geiger
@@ -201,11 +201,11 @@ comes from — see section 5.
    property of the whole surface, weighted by what is behind it: *force
    multiplier* when a chain above is present, *warn* when there is high reach
    without one, *info* otherwise.
-6. **Untrusted content next to wide reach** — a low-trust server sharing a
+6. **Shared context** — a low-trust server sharing a
    context window with a high-reach one can steer calls toward it. Whether a
    description is actually poisoned is a content question and `agent-scan`'s job.
    *Info.*
-7. **Package fetched fresh at every start** — unpinned `npx -y` / `uvx` refetch
+7. **Unpinned package** — unpinned `npx -y` / `uvx` refetch
    at every launch, so the typing has no shelf life. *Info*, or *warn* when there
    is also no approval prompt in the path.
 
@@ -232,7 +232,11 @@ are context. Weight is attached only where the file establishes something:
 - approval turned off, which removes the human from every chain at once — scaled
   to what is behind it, up to **force multiplier** when a chain is,
 - a server observed answering with no credential, or reached over plaintext —
-  facts a config cannot show, so they only appear under `--live`.
+  facts a config cannot show, so they only appear under `--live`. Enumeration
+  never sends the credential in the config, so a tool list that comes back at
+  all was served to an anonymous caller: the token in the file is not what gates
+  that server. Loopback stands the finding down, for the same reason cleartext
+  to loopback does.
 
 Read and write at the same broad path are one fact and are marked once. The
 bulk-read chain stands down when the trifecta covers the same servers. Both
@@ -268,7 +272,7 @@ most people run, would report nothing.
 So a surface that types cleanly is scored, and the note states where the reach
 came from:
 
-- **read from the config** → scored, with an `evidence` finding naming the
+- **typed from the config** → scored, with an `evidence` finding naming the
   config as the source and the flags that would confirm it.
 - **enumerated under `--live`** → scored, with `evidence` reporting that every
   server reported its own tool list.
@@ -292,9 +296,21 @@ surface is the unit the chains are defined over, and it avoids the
 `recognize.dedupe` hazard — matches are keyed on `module + secret`, so N
 secret-less per-server matches from one file would collapse into one.
 
-Per-server breakdown lives in `Finding.Detail`, shown under `-v` and always
-present in `--json`. Benign servers collapse into a count, mirroring how
-`--browser` handles narrow extensions.
+Lines name things rather than counting them, and gloss a primitive in three
+words. A capability line gives the gloss, then the servers and the tools that
+typed it. A chain line gives the path — which server supplies which leg. A
+server line gives the endpoint, what came back, the reach, and anything wrong
+with the server itself. `Finding.Detail` carries what a line had to drop, shown
+under `-v` and always present in `--json`; a detail that only repeats the line
+above it is not written, and `Finding.Verbose` holds back a line that is the
+breakdown of another.
+
+Only one state collapses: a **narrow** server — one that answered, or that the
+catalog knows, and exposes no reach primitive — joins a single `no reach` line
+that names them. A server nothing could type says `not typed`, because that is
+unknown reach rather than none. A server that was asked and did not answer says
+what went wrong. Both keep their own line: calling either narrow would clear a
+server nobody has heard from.
 
 Discovery is an always-on upgrade to the existing walk rather than a mode flag:
 point geiger at a repo, a home directory, or a config file and it types whatever
