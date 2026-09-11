@@ -107,3 +107,40 @@ func TestNoTraceNoResponseCapture(t *testing.T) {
 		t.Errorf("response captured without --trace")
 	}
 }
+
+func TestRecordKeepsStructuralHeadersAndBody(t *testing.T) {
+	// An audit line has to be copy-pasteable. Media types and protocol keys are
+	// not credentials, and masking them made the recorded curl unreadable.
+	c := New(nil, false)
+	body := `{"jsonrpc":"2.0","method":"tools/list","_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}`
+	req, _ := NewRequest(context.Background(), "POST", "https://mcp.example.com/mcp", []byte(body))
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	if _, err := c.Do(req, CallOpts{ReadOnlyPOST: true}); err != nil {
+		t.Fatal(err)
+	}
+	p := c.Planned()[0]
+	if got := p.Headers["Accept"]; got != "application/json, text/event-stream" {
+		t.Errorf("Accept mangled: %q", got)
+	}
+	if got := p.Headers["Content-Type"]; got != "application/json" {
+		t.Errorf("Content-Type mangled: %q", got)
+	}
+	if p.Body != body {
+		t.Errorf("body mangled:\n got %s\nwant %s", p.Body, body)
+	}
+}
+
+func TestRecordMasksCredentialHeaderByName(t *testing.T) {
+	// The value has no digits, so shape alone would print it. The header name
+	// is what says it is a credential.
+	c := New(nil, false)
+	req, _ := NewRequest(context.Background(), "GET", "https://api.example.com/v1/me", nil)
+	req.Header.Set("X-Api-Key", "correcthorsebatterystaple")
+	if _, err := c.Do(req, CallOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Planned()[0].Headers["X-Api-Key"]; strings.Contains(got, "correcthorse") {
+		t.Errorf("credential header not masked: %q", got)
+	}
+}

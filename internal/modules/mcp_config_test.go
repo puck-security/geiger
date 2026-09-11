@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -83,11 +84,19 @@ func TestMCPConfigAggregatorFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := indexByKey(fs)
-	if idx["aggregator"].Flag != module.FlagForceMultiplier {
-		t.Errorf("aggregator should be a force multiplier: %+v", idx["aggregator"])
+	f := idx["inline secrets"]
+	if f.Flag != module.FlagForceMultiplier {
+		t.Errorf("inline secrets should be a force multiplier: %+v", f)
 	}
-	if idx["inline secrets"].Flag != module.FlagForceMultiplier {
-		t.Errorf("inline secrets should be a force multiplier: %+v", idx["inline secrets"])
+	// The count and what the count means are one line, and the line names the
+	// fields to go and delete rather than counting them.
+	for _, want := range []string{"tools MISTRAL_API_KEY", "remote Authorization", "keyring"} {
+		if !strings.Contains(f.Value, want) {
+			t.Errorf("inline-secrets line missing %q: %q", want, f.Value)
+		}
+	}
+	if _, ok := idx["aggregator"]; ok {
+		t.Error("the aggregator point belongs on the inline-secrets line, not a second one")
 	}
 	if mod.Summarize("t", fs).Invalid {
 		t.Error("MCP config note must not be marked dead")
@@ -119,4 +128,156 @@ func keysOf(m map[string]recognize.Match) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// The premise of the agentic-reach work: correct credential hygiene does not
+// bound the blast radius. This config carries no secret at all and still wires
+// the agent to the whole filesystem, the corporate wiki, and a way out.
+func TestMCPConfigScoresReachWithoutAnySecret(t *testing.T) {
+	raw := `{"mcpServers":{
+		"fs":   {"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/"]},
+		"wiki": {"command":"uvx","args":["mcp-atlassian"]},
+		"chat": {"command":"npx","args":["-y","@modelcontextprotocol/server-slack"]}}}`
+	b := parse.Parse(raw, "/home/u/.claude/settings.json")
+	got := modulesOf(recognize.Recognize(b, "", module.Default))
+	agg, ok := got["mcp_config"]
+	if !ok {
+		t.Fatal("mcp_config not recognized")
+	}
+	if agg.Fields["secret_count"] != "0" {
+		t.Fatalf("fixture must carry no inline secret, got %q", agg.Fields["secret_count"])
+	}
+
+	mod, _ := module.Default.ByName("mcp_config")
+	fs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, agg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := indexByKey(fs)
+	// The capability lines are inventory and carry no weight; the chain they
+	// take part in is what makes the surface score.
+	for _, key := range []string{"corpus-search", "fs-read", "fs-write"} {
+		if _, ok := idx[key]; !ok {
+			t.Errorf("missing finding %q — reach must be reported independently of secrets", key)
+		}
+	}
+	f, ok := idx["lethal trifecta"]
+	if !ok {
+		t.Fatal("missing the trifecta chain — reach must be reported independently of secrets")
+	}
+	if f.Flag != module.FlagForceMultiplier {
+		t.Errorf("trifecta flag = %v, want force multiplier", f.Flag)
+	}
+
+	// The config types cleanly, so it is scored rather than withheld. The note
+	// still has to say the reach came from the config and not from enumeration.
+	n := mod.Summarize("t", fs)
+	if n.Undetermined {
+		t.Error("a surface typed from its config must be scored, not left Undetermined")
+	}
+	if n.Invalid {
+		t.Error("an agent surface is never 'dead'")
+	}
+	if e, ok := findingFor(n.Findings, "evidence"); !ok {
+		t.Error("the note must state how the reach was established")
+	} else if !strings.Contains(e.Value, "typed from the package name") {
+		t.Errorf("evidence should name the config as the source: %q", e.Value)
+	}
+	// The sentinels must not leak into the printed findings.
+	for _, f := range n.Findings {
+		if strings.HasPrefix(f.Key, "_") {
+			t.Errorf("internal sentinel %q leaked into the note", f.Key)
+		}
+	}
+}
+
+// A settings.json with no MCP servers at all is still an agent surface when it
+// carries hooks: they run shell on lifecycle events with nothing in the path.
+func TestMCPConfigRecognizesHookOnlySurface(t *testing.T) {
+	raw := `{"hooks":{"PreToolUse":[{"hooks":[{"command":"/opt/x.sh"}]}]}}`
+	b := parse.Parse(raw, "/home/u/.claude/settings.json")
+	got := modulesOf(recognize.Recognize(b, "", module.Default))
+	if _, ok := got["mcp_config"]; !ok {
+		t.Fatal("a hooks-only agent settings.json should be recognized")
+	}
+}
+
+// A settings.json that is not an agent config must not be claimed on its name.
+func TestMCPConfigIgnoresUnrelatedJSON(t *testing.T) {
+	for _, f := range []string{"/srv/app/settings.json", "/etc/config.json"} {
+		b := parse.Parse(`{"theme":"dark","fontSize":12}`, f)
+		if _, ok := modulesOf(recognize.Recognize(b, "", module.Default))["mcp_config"]; ok {
+			t.Errorf("%s is not an agent surface", f)
+		}
+	}
+}
+
+func findingFor(fs []module.Finding, key string) (module.Finding, bool) {
+	for _, f := range fs {
+		if f.Key == key {
+			return f, true
+		}
+	}
+	return module.Finding{}, false
+}
+
+// A config geiger cannot type at all is the case Undetermined exists for.
+func TestMCPConfigUntypeableSurfaceIsUndetermined(t *testing.T) {
+	b := parse.Parse(`{"mcpServers":{"mystery":{"command":"./unknown-binary"}}}`, "mcp.json")
+	var agg recognize.Match
+	for _, m := range recognize.Recognize(b, "", module.Default) {
+		if m.Module == "mcp_config" {
+			agg = m
+		}
+	}
+	mod, _ := module.Default.ByName("mcp_config")
+	fs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, agg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := mod.Summarize("t", fs)
+	if !n.Undetermined {
+		t.Error("a server with no identifiable reach must leave the note Undetermined")
+	}
+	if n.Reason == "" {
+		t.Error("an Undetermined note must say why")
+	}
+}
+
+// A note can carry a page of reach and still owe its tier to the credentials in
+// the file. Saying which is shorter than making the reader work it out.
+func TestMCPConfigSaysWhenTheReachIsNotTheProblem(t *testing.T) {
+	// One wiki server: typed to bulk read, with nothing to compose it with. The
+	// tier comes from the key sitting next to it in the file.
+	raw := `{"mcpServers":{"wiki":{"command":"uvx","args":["mcp-atlassian"],
+		"env":{"MISTRAL_API_KEY":"MistralKey1234567890abcdefGHIJKL"}}}}`
+	b := parse.Parse(raw, "/home/u/.claude.json")
+	agg := modulesOf(recognize.Recognize(b, "", module.Default))["mcp_config"]
+	if agg.Fields["secret_count"] == "0" {
+		t.Fatal("fixture must carry an inline secret")
+	}
+
+	mod, _ := module.Default.ByName("mcp_config")
+	fs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, agg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := indexByKey(fs)[summaryKey].Value
+	if !strings.Contains(sum, "tier from 1 credential") {
+		t.Errorf("the summary must name what the tier came from: %q", sum)
+	}
+
+	// A surface that does compose keeps quiet: the chain finding says it.
+	chained := `{"mcpServers":{
+		"wiki": {"command":"uvx","args":["mcp-atlassian"]},
+		"web":  {"command":"npx","args":["-y","@modelcontextprotocol/server-fetch"]}}}`
+	cb := parse.Parse(chained, "/home/u/.claude.json")
+	cagg := modulesOf(recognize.Recognize(cb, "", module.Default))["mcp_config"]
+	cfs, err := mod.Recon(context.Background(), recon.New(nil, false), module.Token{}, cagg.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(indexByKey(cfs)[summaryKey].Value, "tier from") {
+		t.Error("the chain finding already says the reach is the problem")
+	}
 }

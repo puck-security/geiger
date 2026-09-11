@@ -186,9 +186,21 @@ func suppressOverridden(in []Match) []Match {
 // field of a specific (structured) match — e.g. an AWS secret access key that
 // also trips generic-api-key, or an SSO registration's clientSecret that also
 // decodes as a bare JWT.
+//
+// A structured recognizer that re-triages a secret out of a wrapper (an
+// "Authorization: Bearer <tok>" header, say) records the wrapper form in a
+// _raw field. The bare-name recognizer sees the wrapper as its whole value, so
+// the two secrets differ as strings and plain dedupe cannot collapse them; the
+// _raw entry is what says they are the same credential. That holds even when
+// the re-triaged match is itself generic, which is the common case for an
+// internal token no provider module claims.
 func suppressConsumedUnknowns(in []Match) []Match {
 	consumed := map[string]bool{}
+	raw := map[string]bool{}
 	for _, m := range in {
+		if r := m.Fields["_raw"]; r != "" {
+			raw[r] = true
+		}
 		if isGeneric(m) {
 			continue
 		}
@@ -199,7 +211,7 @@ func suppressConsumedUnknowns(in []Match) []Match {
 	}
 	var out []Match
 	for _, m := range in {
-		if isGeneric(m) && consumed[m.Secret] {
+		if isGeneric(m) && (consumed[m.Secret] || (raw[m.Secret] && m.Fields["_raw"] == "")) {
 			continue
 		}
 		out = append(out, m)

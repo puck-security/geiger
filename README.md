@@ -8,7 +8,7 @@
 [![license: MIT](https://img.shields.io/github/license/puck-security/geiger?color=3ddc84)](LICENSE)
 [![release](https://img.shields.io/github/v/release/puck-security/geiger?color=3ddc84)](../../releases)
 [![ci](https://img.shields.io/github/actions/workflow/status/puck-security/geiger/ci.yml?branch=main&label=ci)](../../actions/workflows/ci.yml)
-![go 1.25+](https://img.shields.io/badge/go-1.25%2B-00ADD8.svg)
+![go 1.26+](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)
 ![recon: read-only](https://img.shields.io/badge/recon-read--only-3ddc84.svg)
 
 <img src="assets/geiger-demo.svg" width="660"
@@ -34,7 +34,7 @@ Triage: an incident responder's *"how bad is this?"* and a pentester's
 tar xzf geiger_*_linux_amd64.tar.gz && sudo mv geiger /usr/local/bin/
 ```
 
-**Source** (Go 1.25+):
+**Source** (Go 1.26+):
 
 ```sh
 git clone https://github.com/puck-security/geiger && cd geiger
@@ -166,6 +166,73 @@ geiger --browser --all              # full inventory (incl. narrow/benign)
 geiger --browser --json             # IOCs (extension id, hosts) for a SIEM
 ```
 
+**Agentic reach** — point geiger at an agent config, a repo, or a home directory
+and it maps what the agent's *tool chain* reaches. This is on by default: no flag,
+it just happens when a config turns up in the walk.
+
+The credential axis and the reach axis are separate, and that is the point. A
+config whose every secret is stored properly — OS env, a keychain, an OAuth flow —
+can still wire the agent to a filesystem server rooted at `/`, a shell server, and
+the corporate wiki. Perfect credential hygiene bounds none of that.
+
+```sh
+geiger ~/.claude.json                    # what this agent's tools reach
+geiger ./repo                            # .mcp.json / .cursor / .vscode in a repo
+geiger --live ~/.cursor/mcp.json         # enumerate remote servers' real tool lists
+geiger --live --spawn-stdio ~/.claude    # + run local stdio servers to enumerate them
+```
+
+Each server is typed into **reach primitives** — `exec`, `corpus-search`,
+`secrets-read`, `code-write`, `cloud-control`, `fs-read`/`fs-write` *with their root
+path*, `data-read`, `net-egress`, `untrusted-in`, `destructive`, `identity-admin`.
+Bulk store search is deliberately its own primitive: *"give me every credential in
+Confluence"* is one tool call and the highest-yield move in a real engagement, so
+folding it into a generic "reads data" would bury it.
+
+That list is inventory, and it does not set a tier. A config file says what an
+agent is wired to; it cannot say whether that is appropriate for the machine it
+is on, and a filesystem server scoped to a project directory is the normal setup.
+An ordinary developer laptop scores INFO.
+
+The tier comes from the **compositions** — reach that exists only because the
+tools share one context window, which no per-component scanner can see:
+
+| Chain | Why it matters |
+|---|---|
+| lethal trifecta | untrusted content, private data and a way out in one context — one poisoned page and the agent leaks what it can read |
+| bulk read plus a way out | search the store, send the results. Two tool calls, no exploit |
+| exec on this host | an `exec` tool makes the agent's reach the host's reach: every credential on the box, geiger's other findings in the same run included |
+| reads a secret store | tool-chain access becomes credentials that outlive the session |
+| shared context | a low-trust server sharing a context with a high-reach one |
+| unpinned package | `npx -y` / `uvx` refetch at every launch, so the code that runs tomorrow need not be the code in the config |
+
+Alongside those, three things the file itself establishes: a filesystem root that
+is the whole disk or home directory rather than a project, **no approval prompt**
+(`permissions.allow`, `alwaysAllow`, YOLO mode), scored as a property of the whole
+surface because it removes the human from every chain at once, and — under
+`--live` only — a server that answers with no credential (enumeration sends
+none, so the token in the config is not what gates it) or is reached over
+plaintext. **Hooks** are inventoried too: they run shell on lifecycle events with
+no model and no approval in that path, and nothing else lists them.
+
+Runtimes read: Claude Code and Claude Desktop, Cursor, VS Code, Windsurf,
+Cline/Roo/Kilo, Continue, Gemini CLI, Zed, Codex, Goose.
+
+**Honest by construction.** The note always says where the reach came from: read
+from the config (what these packages are known to do) or reported by the servers
+themselves. A surface whose servers type to nothing at all reads `UNKNOWN` rather
+than getting a severity invented from a guess.
+
+The two flags split by transport. `--live` enumerates the **remote** servers'
+real tool lists over http (`tools/list`, read-only; `tools/call` is never
+issued). A **local** stdio server is only asked under `--spawn-stdio`, because
+asking it means running the command in the config — a separate flag from
+`--intrusive` on purpose: executing an argv that came out of the scanned file is
+worse than anything `--intrusive` permits. Each server line says which it is
+(`stdio <command>` or a URL) and whether it was asked.
+
+See [docs/design/agentic-reach.md](docs/design/agentic-reach.md) for the design.
+
 ---
 
 ## Where geiger fits
@@ -180,6 +247,7 @@ geiger characterizes it. Pipe in a report (`--from-gitleaks` / `--from-truffleho
 | Verify the secret is live | — | ✅ | ✅ | ✅ | ✅ |
 | Characterize blast radius (identity, scope, reach) | — | partial | partial | ✅ | ✅ ~170+ types|
 | Triage any credential you hand it, type auto-detected | — | — | — | partial | ✅ |
+| Map an agent's tool-chain reach + escalation chains (MCP) | — | — | — | — | ✅ |
 | Drain secret-managers + recursively triage downstream | — | — | — | — | ✅ |
 | DB / cluster / on-disk store recon (read-only) | — | — | — | partial | ✅ |
 | Ranked for IR ("how bad, in what order") | — | — | partial | ✅ | ✅ |
@@ -215,6 +283,7 @@ recursive triage.
 | `--min-footprint` | identity call only; skip inventory fan-out |
 | `--env` | read current environment variables |
 | `--metadata` | harvest this instance's metadata credential (AWS/GCP/Azure/k8s/Alibaba/DigitalOcean/OCI) and triage it; requires `--live` (it's a network read) |
+| `--spawn-stdio` | enumerate local stdio MCP servers by **running** each configured command (needs `--live`); remote servers are enumerated by `--live` alone |
 | `--browser` | model malicious-browser-extension impact: score installed Chromium-family extensions; with `--live --intrusive`, inventory the live sessions they'd reach |
 | `--all` | with `--browser`, list every extension (not just the risky ones) |
 | `--endpoint URL` | host/instance for self-hosted & set-shaped creds |
@@ -252,7 +321,8 @@ geiger triages a credential **you were handed**, or one **sitting on disk**.
 
 - **In scope — on-disk / offline-readable.** API tokens, connection strings,
   cloud CLI caches (`~/.aws`, gcloud, MSAL), SSH keys, kubeconfigs, secrets-manager
-  creds, MCP configs, AI-IDE plaintext token stores, password-manager *recovery
+  creds, MCP configs (also triaged for **tool-chain reach**, not just the secrets in
+  them — see **Agentic reach**), AI-IDE plaintext token stores, password-manager *recovery
   material* (KeePass, encrypted Bitwarden — offline-crackable with the master
   password), plaintext exports, and Firefox saved logins (`logins.json` +
   `key4.db`), which decrypt offline when no primary password is set.
@@ -273,8 +343,7 @@ key that runs code, wipes devices, restores backups, or reads *other* secrets is
 a force multiplier; a billed-usage API key is a warning.
 
 <details>
-<summary><b>Full coverage — 176 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
-
+<summary><b>Full coverage — 178 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
 
 **Cloud & hosting**
 
@@ -328,6 +397,12 @@ a force multiplier; a billed-usage API key is a warning.
 | `buildkite` | Buildkite — pipelines + build-agent access |
 | `circleci` | CircleCI — pipelines + project env vars |
 
+**Media & file services**
+
+| Credential / app | Reach |
+|---|---|
+| `filestack` | Filestack API key — file upload/transform on this account |
+
 **Databases & data platforms**
 
 | Credential / app | Reach |
@@ -369,7 +444,8 @@ a force multiplier; a billed-usage API key is a warning.
 | `elevenlabs` | ElevenLabs — voice API (billed usage + voice library) |
 | `stability` | Stability AI — image API (billed usage) |
 | `pinecone` | Pinecone — vector index read/write (embedded data) |
-| `mcp_config` | MCP config — agent credential aggregator |
+| `bedrock` | Amazon Bedrock API key — foundation-model access (billable) |
+| `mcp_config` | agent tool chain — what the agent reaches through its MCP servers, hooks, and approval posture |
 | `ai_ide_store` | AI-IDE token store (plaintext SQLite) |
 
 **Secrets managers & vaults**
@@ -404,6 +480,7 @@ a force multiplier; a billed-usage API key is a warning.
 | `auth0` | Auth0 — tenant management API (users, apps, rules) |
 | `duo` | Duo — MFA admin API (bypass codes, user mgmt) |
 | `workday` | Workday — HR/finance records (PII) |
+| `workos` | WorkOS API key — SSO/Directory Sync/User Management control |
 
 **Endpoint, MDM, RMM & config-mgmt**
 
@@ -468,6 +545,8 @@ a force multiplier; a billed-usage API key is a warning.
 | `freshdesk` | Freshdesk help desk key — tickets and contact PII |
 | `freshchat` | Freshchat — all conversations and contact PII |
 | `freshsales` | Freshsales CRM — contact PII and pipeline data |
+| `atlassian` | Atlassian API token — set email + site to validate reach |
+| `confluence` | Confluence (Atlassian Cloud) — full space/page read; pages often hold secrets |
 
 **Comms, email & SMS**
 
@@ -518,18 +597,6 @@ a force multiplier; a billed-usage API key is a warning.
 | `jwt` | decoded offline — no network call made; map issuer to its provider for live recon |
 | `generic_secret` | unrecognized credential (matched by name) |
 | `needs_endpoint` | recognized — provide --endpoint to characterize |
-
-**Uncategorized (add to a group in tools/coverage)**
-
-| Credential / app | Reach |
-|---|---|
-| `atlassian` | Atlassian API token — set email + site to validate reach |
-| `bedrock` | Amazon Bedrock API key — foundation-model access (billable) |
-| `confluence` | Confluence (Atlassian Cloud) — full space/page read; pages often hold secrets |
-| `filestack` | Filestack API key — file upload/transform on this account |
-| `workos` | WorkOS API key — SSO/Directory Sync/User Management control |
-
-_176 credential types_
 
 </details>
 

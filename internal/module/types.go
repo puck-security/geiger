@@ -161,6 +161,12 @@ type Finding struct {
 	// individual file paths behind "8 editor local-history snapshots"). The
 	// terminal shows it only with -v; JSON always emits it. Optional.
 	Detail []string
+	// Verbose marks a line as the breakdown behind another line rather than a
+	// fact of its own: a per-server repeat of a capability already reported, a
+	// list of servers a count already gave. The terminal prints it only with
+	// -v; JSON always emits it. A line carrying a flag is never Verbose — a
+	// reader must not have to ask twice to see something that scored.
+	Verbose bool
 }
 
 // ExposureKey is the finding key recording WHERE a credential was exposed.
@@ -212,6 +218,17 @@ type Module interface {
 type Harvested struct {
 	Label string // provenance, e.g. "secretsmanager:prod/db-password"
 	Value string // the extracted secret value
+}
+
+// OfflineTyper is implemented by modules whose findings come from the structure
+// of the scanned file rather than from a response. Every other module answers a
+// dry-run with nothing — the responses are synthetic — so the pipeline replaces
+// its note with a preview of the calls it would have made. For these, that
+// would throw away the whole analysis: an agent config types from what is
+// written in it, and --live only sharpens the result.
+type OfflineTyper interface {
+	// TypesOffline reports that Recon produces real findings with no network.
+	TypesOffline() bool
 }
 
 // Harvester is implemented by modules that can read a secrets store. Harvest
