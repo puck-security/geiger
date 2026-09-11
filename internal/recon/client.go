@@ -216,6 +216,15 @@ func (c *Client) record(req *http.Request, note string) PlannedCall {
 			hdr[k] = c.scrub(joined)
 			continue
 		}
+		// A header whose NAME says it carries a credential is masked even when
+		// its value survives the shape test — redact.Line cannot see an
+		// all-letter password, and the header name can. The shape pass still
+		// runs first, so a multi-part value (a SigV4 authorization) keeps the
+		// per-run masking it has always had.
+		if credentialHeader(k) {
+			hdr[k] = maskCredential(clean(joined))
+			continue
+		}
 		hdr[k] = clean(joined)
 	}
 	body := ""
@@ -230,6 +239,44 @@ func (c *Client) record(req *http.Request, note string) PlannedCall {
 	// run through the generic redactor — that would mangle the host/path and
 	// defeat the audit trail.
 	return PlannedCall{Method: req.Method, URL: c.scrub(req.URL.String()), Headers: hdr, Body: body, Note: note}
+}
+
+// credentialHeaders are the header names that carry a secret by definition.
+// Their values are masked on name, not on shape.
+var credentialHeaders = map[string]bool{
+	"authorization":        true,
+	"proxy-authorization":  true,
+	"cookie":               true,
+	"set-cookie":           true,
+	"x-api-key":            true,
+	"api-key":              true,
+	"apikey":               true,
+	"x-auth-token":         true,
+	"x-authorization":      true,
+	"x-amz-security-token": true,
+	"x-access-token":       true,
+	"x-session-token":      true,
+	"private-token":        true,
+	"x-vault-token":        true,
+	"x-goog-api-key":       true,
+	"authentication":       true,
+}
+
+// credentialHeader reports whether a header name carries a credential.
+func credentialHeader(name string) bool { return credentialHeaders[strings.ToLower(name)] }
+
+// maskCredential masks a credential header value that nothing else has touched,
+// keeping any auth scheme in front of it so the audit line still shows what
+// shape was sent. A value already carrying a $VAR reference or a redaction is
+// left alone — masking it twice would mangle the placeholder.
+func maskCredential(v string) string {
+	if v == "" || strings.ContainsAny(v, "$…") {
+		return v
+	}
+	if i := strings.LastIndexByte(strings.TrimRight(v, " "), ' '); i > 0 {
+		return v[:i+1] + redact.Secret(v[i+1:])
+	}
+	return redact.Secret(v)
 }
 
 // Do executes (live) or records (dry-run) a request after the read-only check.
