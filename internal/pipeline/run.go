@@ -49,6 +49,18 @@ type Result struct {
 	Planned   []recon.PlannedCall
 	harvested []module.Harvested
 	secret    string // for cross-source dedup/annotation
+	// Secrets holds every secret-valued input behind the note: the dedup
+	// secret plus each field that carries credential material (a set-shaped
+	// credential has several). The redact mode rewrites these in the source
+	// file. Never printed.
+	Secrets []SecretValue
+	label   string // where the match came from, e.g. ".env: GITHUB_TOKEN"
+}
+
+// SecretValue is one secret input of a match and the field it filled.
+type SecretValue struct {
+	Value string
+	Field string // the module's field name ("secret_key"); "" for a bare secret
 }
 
 const (
@@ -71,6 +83,85 @@ var nonSecretField = map[string]bool{
 	// values. Registering it as a secret would be inert (it never appears in a
 	// URL) and would hide the destinations the audit trail exists to show.
 	"_surface": true,
+}
+
+// locatorField names fields that describe or locate a credential and must not
+// be treated as secret material by the redact mode: rewriting a user name or an
+// environment name everywhere in a file would shred it. nonSecretField covers
+// the audit-trail cases; this covers the rest.
+var locatorField = map[string]bool{
+	"user": true, "username": true, "login": true, "name": true, "id": true,
+	"key_id": true, "access_id": true, "private_key_id": true, "env": true,
+	"endpoint_var": true, "source": true, "path": true, "url": true, "api": true,
+	"auth_url": true, "token_uri": true, "instance": true, "realm": true,
+	"dc": true, "shop": true, "team": true, "wiki": true, "web": true,
+	"registry": true, "remote": true, "target": true, "type": true,
+	"credential_type": true, "client_type": true, "grant_type": true,
+	"scope": true, "scopes": true, "aud": true, "audience": true, "iss": true,
+	"sub": true, "upn": true, "exp": true, "expires_at": true, "expiry": true,
+	"role": true, "revision": true, "start_url": true, "command": true,
+	"args": true, "context": true, "output_mode": true, "impact": true,
+	"terraform_version": true, "client_email": true,
+	// The agent-surface summary fields: counts and a list of where the inline
+	// credentials sit, not the credentials themselves.
+	"server_count": true, "stdio_count": true, "remote_count": true,
+	"secret_count": true, "secret_fields": true,
+}
+
+// minRedactLen is the shortest value the redact mode will replace. A shorter
+// value is too likely to occur in the file as ordinary text.
+const minRedactLen = 8
+
+// secretValues returns the secret material of a match: the dedup secret and
+// every field that is neither a locator nor an internal annotation. Values
+// shorter than minRedactLen are left out; the redact mode reports them as
+// skipped rather than replacing a short common string across a file.
+func secretValues(m recognize.Match) []SecretValue {
+	seen := map[string]bool{}
+	var out []SecretValue
+	add := func(v, field string) {
+		if len(v) < minRedactLen || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, SecretValue{Value: v, Field: field})
+	}
+	// Fields first, so a value that is both the dedup secret and a named
+	// field keeps its name.
+	keys := make([]string, 0, len(m.Fields))
+	for k := range m.Fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if strings.HasPrefix(k, "_") || nonSecretField[k] || locatorField[k] {
+			continue
+		}
+		add(m.Fields[k], k)
+	}
+	add(m.Secret, "")
+	return out
+}
+
+// Locations returns every source the result's secret was seen in: the file the
+// note names first, then the deduplicated repeats recorded by claim.
+func (bt *Batch) Locations(r Result) []string {
+	locs := []string{r.Note.File}
+	if r.secret != "" {
+		bt.st.mu.Lock()
+		locs = append(locs, bt.st.dupLocs[r.secret]...)
+		bt.st.mu.Unlock()
+	}
+	seen := map[string]bool{}
+	out := locs[:0]
+	for _, l := range locs {
+		if l == "" || seen[l] {
+			continue
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+	return out
 }
 
 // harvestState bounds transitive harvesting and dedupes secrets across the whole
@@ -365,6 +456,8 @@ func triageBlob(b parse.Blob, matches []recognize.Match, reg *module.Registry, o
 		}
 		res := runOne(b, reg, opts, m)
 		res.secret = m.Secret
+		res.Secrets = secretValues(m)
+		res.label = m.Label
 		// Set centrally rather than in runOne, which returns early on several
 		// paths — every note carries its provenance, including the invalid ones.
 		res.Note.Module, res.Note.File, res.Note.Line = m.Module, b.File, m.Line

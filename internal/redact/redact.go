@@ -7,6 +7,12 @@ import (
 	"unicode"
 )
 
+// Placeholder is what the redact mode writes over a secret in a file. It is
+// plain ASCII with no quote, slash, or whitespace, so a JSON, YAML, INI, or
+// dotenv file stays parseable, and recognition drops it, so a second scan of a
+// redacted tree stays clean.
+const Placeholder = "REDACTED-BY-GEIGER"
+
 // Secret masks a credential, preserving only a short tail for correlation.
 // Short secrets are fully masked. Examples:
 //

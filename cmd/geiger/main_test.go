@@ -377,3 +377,81 @@ func TestPrintCallsCountsByDefaultAndExpandsVerbatim(t *testing.T) {
 		t.Errorf("nothing may be truncated when expanded:\n%s", full.String())
 	}
 }
+
+func TestRedactRefusesInputsItCannotRewrite(t *testing.T) {
+	dir := t.TempDir()
+	f := writeFile(t, dir, "a.env", awsCreds)
+	report := writeFile(t, dir, "gitleaks.json", `[{"RuleID":"aws-access-token","Secret":"AKIAIOSFODNN7EXAMPLE","File":"a.env","StartLine":0}]`)
+	cases := []struct {
+		name string
+		c    config
+		want string
+	}{
+		{"confirm alone", config{confirmRedact: true, args: []string{f}}, "needs --dangerous-redact"},
+		{"replacements alone", config{replacements: "r.txt", args: []string{f}}, "needs --dangerous-redact"},
+		{"env", config{redact: true, useEnv: true}, "--env"},
+		{"report flag", config{redact: true, fromGitleaks: report}, "scanner report"},
+		{"report arg", config{redact: true, args: []string{report}}, "scanner report"},
+		{"stream", config{redact: true, stream: true, args: []string{f}}, "--stream"},
+		{"stdin", config{redact: true}, "stdin"},
+	}
+	for _, c := range cases {
+		c.c.colorMode = "never"
+		_, errOut, code := captureRun(false, c.c)
+		if code != 2 || !strings.Contains(errOut, c.want) {
+			t.Errorf("%s: exit %d, stderr %q (want %q)", c.name, code, errOut, c.want)
+		}
+	}
+	if got, _ := os.ReadFile(f); string(got) != awsCreds {
+		t.Error("a refused run must not write")
+	}
+}
+
+func TestRedactPlansThenRewritesOnConfirm(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "backups"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stripe := "STRIPE_SECRET_KEY=sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc\n"
+	live := writeFile(t, dir, ".env", awsCreds+stripe)
+	backup := writeFile(t, dir, "backups/.env.backup.1", awsCreds)
+
+	out, _, code := captureRun(false, config{colorMode: "never", redact: true, args: []string{dir}})
+	if code != 0 {
+		t.Fatalf("plan exit %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "would rewrite 2 file(s)") || !strings.Contains(out, "Nothing was written") {
+		t.Errorf("plan output:\n%s", out)
+	}
+	if strings.Contains(out, "4eC39HqLyjWDarjtT1zdp7dc") || strings.Contains(out, "wJalrXUtnFEMI") {
+		t.Errorf("plan output leaks a secret:\n%s", out)
+	}
+	if got, _ := os.ReadFile(live); string(got) != awsCreds+stripe {
+		t.Fatal("plan must not write")
+	}
+
+	repl := filepath.Join(dir, "repl.txt")
+	out, _, code = captureRun(false, config{colorMode: "never", redact: true, confirmRedact: true, replacements: repl, args: []string{dir}})
+	if code != 0 {
+		t.Fatalf("confirm exit %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "rewrote 2 file(s)") || !strings.Contains(out, "Rotate every credential") {
+		t.Errorf("confirm output:\n%s", out)
+	}
+	want := "AWS_ACCESS_KEY_ID=" + pipeline.Placeholder + "\nAWS_SECRET_ACCESS_KEY=" + pipeline.Placeholder + "\nSTRIPE_SECRET_KEY=" + pipeline.Placeholder + "\n"
+	if got, _ := os.ReadFile(live); string(got) != want {
+		t.Errorf("live file:\n%s", got)
+	}
+	if got, _ := os.ReadFile(backup); strings.Contains(string(got), "EXAMPLE") {
+		t.Errorf("backup (a repeat location) not rewritten:\n%s", got)
+	}
+	if got, _ := os.ReadFile(repl); strings.Count(string(got), "==>") != 3 {
+		t.Errorf("replacements file:\n%s", got)
+	}
+
+	// The redacted tree scans clean: the placeholder is not a credential.
+	_, errOut, _ := captureRun(false, config{colorMode: "never", args: []string{live, backup}})
+	if !strings.Contains(errOut, "no credentials recognized") {
+		t.Errorf("rescan of the redacted files should find nothing:\n%s", errOut)
+	}
+}

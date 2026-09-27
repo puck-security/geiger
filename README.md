@@ -233,6 +233,36 @@ worse than anything `--intrusive` permits. Each server line says which it is
 
 See [docs/design/agentic-reach.md](docs/design/agentic-reach.md) for the design.
 
+**Redact what geiger found** — once you have rotated (or decided to rotate)
+what a scan turned up, geiger can strip the values from the files it read, so a
+backup directory or an old dotfile stops leaking the same credentials again:
+
+```sh
+geiger --dangerous-redact ~/.claude                    # plan only: what would change
+geiger --dangerous-redact --confirm-redact ~/.claude   # rewrite in place
+geiger --dangerous-redact --confirm-redact --git-history \
+       --redact-replacements /tmp/repl.txt ./repo      # + file for git filter-repo
+git filter-repo --replace-text /tmp/repl.txt           # then scrub the history
+```
+
+The plan lists each file, and under it each value: the line it sits on, the
+module that recognized it, the variable or JSON path it came from, a masked
+tail to match against the findings report, and the form it was found in. The
+same list is printed after a rewrite, as the record of what changed. A plain
+or JSON-escaped value is a text swap: the file keeps its shape and only the
+value changes. A value stored as base64 (a docker `auth` blob, a kubeconfig
+key) is replaced too, but the placeholder does not decode, so the consumer of
+that file errors until the value is replaced. Anything else is listed under a
+warning with the reason and is **not** rewritten: git history blobs (use the
+replacements file), archive members, symlinks, binary and SQLite stores, values
+harvested from a secrets store, and values that were transformed before geiger
+saw them.
+
+Two things it will not do. It keeps no backup: a backup would hold the secrets
+again. And it revokes nothing: a redacted file is one that stops re-leaking,
+not a rotated credential. It refuses to run on stdin, `--env`, `--metadata`,
+`--browser`, or a scanner report, since none of those is a file it read itself.
+
 ---
 
 ## Where geiger fits
@@ -301,6 +331,9 @@ recursive triage.
 | `--from-gitleaks F` / `--from-trufflehog F` | triage each finding in a scanner report |
 | `--from-nuclei F` | triage each value extracted by a nuclei JSONL (`-j`) scan; `F` = `-` reads stdin (stream over a pipe) |
 | `--from-kingfisher F` | triage each finding in a Kingfisher JSON/JSONL report (not `--redact`ed — geiger needs the value); `F` = `-` reads stdin. Their finding fingerprint is carried through to `--json`/`--sarif` so their viewer dedupes against its own findings |
+| `--dangerous-redact` | plan an in-place rewrite of the scanned files that replaces each found credential with `REDACTED-BY-GEIGER`; prints the plan, writes nothing. See [Redact what geiger found](#redact-what-geiger-found) |
+| `--confirm-redact` | with `--dangerous-redact`, do the rewrite. No backup, no undo |
+| `--redact-replacements FILE` | with `--confirm-redact`, also write a `git filter-repo --replace-text` file (`0600`) for scrubbing git history |
 | `--git-history` | also scan blobs in a repository's git history — catches credentials deleted from the working tree but still recoverable from the repo (needs `git` on PATH) |
 | `--ssh-correlate` | SSH: read local hints for candidate target hosts |
 | `--trace` | print the raw request + response of each call (secrets masked) |

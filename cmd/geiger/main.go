@@ -36,8 +36,9 @@ var version = "dev"
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
 	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, gitHistory, verbose, stream, quiet, noReverse, useMetadata, browser, allExts, spawnStdio bool
+	redact, confirmRedact                                                                                                                                            bool
 	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                                                   string
-	userAgent, minSeverity, output                                                                                                                                   string
+	userAgent, minSeverity, output, replacements                                                                                                                     string
 	timeout                                                                                                                                                          time.Duration
 	concurrency, minSevRank                                                                                                                                          int
 	args                                                                                                                                                             []string
@@ -80,6 +81,9 @@ func main() {
 	flag.StringVar(&c.minSeverity, "min-severity", "", "only print findings at or above this tier: critical|high|medium|low|info|unknown|dead")
 	flag.StringVar(&c.output, "o", "", "write results to FILE instead of stdout (0600, color off; status stays on stderr)")
 	flag.StringVar(&c.output, "output", "", "alias for -o")
+	flag.BoolVar(&c.redact, "dangerous-redact", false, "plan a rewrite of the scanned files that replaces each found credential with a placeholder; prints the plan and writes nothing")
+	flag.BoolVar(&c.confirmRedact, "confirm-redact", false, "with --dangerous-redact, perform the rewrite in place (no backup, no undo)")
+	flag.StringVar(&c.replacements, "redact-replacements", "", "with --dangerous-redact --confirm-redact, also write FILE (0600) for git filter-repo --replace-text, covering git history")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -111,6 +115,11 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 	color.Enabled = wantColor(c.colorMode, c.machine())
 	ctx := score.Context{Terms: splitCSV(c.contextTerms)}
 	st := &status{w: stderr, on: statusOn}
+
+	if msg := c.redactRefused(); msg != "" {
+		fmt.Fprintln(stderr, "geiger:", msg)
+		return 2
+	}
 
 	// --metadata reads the instance-metadata service — a network call — so it honors
 	// geiger's "no network until --live" promise: without --live it's a no-op notice.
@@ -237,8 +246,11 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		st.update("triaging %d/%d", done, len(sources))
 	})
 	bt.AnnotateDuplicates(results) // note any secret also found in other files
-	results = append(results, extra...)
 	st.clear()
+	if c.redact {
+		return runRedact(stdout, stderr, results, bt, c)
+	}
+	results = append(results, extra...)
 	if len(results) == 0 {
 		if !c.quiet {
 			fmt.Fprintln(stderr, "geiger: no credentials recognized.")
@@ -362,6 +374,12 @@ func header(c config) string {
 		if mode = "live"; c.intrusive {
 			mode = "live --intrusive"
 		}
+	}
+	switch {
+	case c.confirmRedact:
+		mode += " · REDACT (rewriting files)"
+	case c.redact:
+		mode += " · redact plan"
 	}
 	return fmt.Sprintf("geiger %s · %s · %s", version, target, mode)
 }
@@ -745,6 +763,7 @@ func usage() {
   geiger a.env b.env services/    # multiple files/dirs at once
   geiger --live --intrusive --only databases ./repo   # deepen just DB creds
   geiger ~/.claude.json           # what an agent's tool chain reaches
+  geiger --dangerous-redact ~/.claude   # plan a rewrite that strips the creds found
   geiger --from-gitleaks report.json
   nuclei -t exposures/ -l targets.txt -j -irr | geiger --from-nuclei - --live
   aws configure export-credentials | geiger
@@ -783,6 +802,12 @@ flags:
   --list-modules      print the registered modules as JSON and exit (name +
                       whether the credential lives in a file a scanner must find)
   -o, --output FILE   write results to FILE instead of stdout (0600, color off)
+  --dangerous-redact  plan an in-place rewrite of the scanned files that replaces
+                      each found credential with REDACTED-BY-GEIGER; writes nothing
+  --confirm-redact    with --dangerous-redact, do the rewrite (no backup, no undo)
+  --redact-replacements FILE
+                      with --confirm-redact, also write a git filter-repo
+                      --replace-text file (0600) to scrub git history
   --user-agent UA     User-Agent for recon calls (default geiger/<version>)
   -v                  show planned/executed calls
   -q                  quiet: suppress the stderr status header and progress
