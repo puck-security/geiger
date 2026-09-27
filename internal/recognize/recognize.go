@@ -8,6 +8,7 @@ package recognize
 import (
 	"github.com/puck-security/geiger/internal/module"
 	"github.com/puck-security/geiger/internal/parse"
+	"github.com/puck-security/geiger/internal/redact"
 	"net/url"
 	"strings"
 )
@@ -46,10 +47,25 @@ func Recognize(b parse.Blob, endpoint string, reg *module.Registry) []Match {
 	for _, f := range custom {
 		matches = append(matches, f(b, endpoint, reg)...)
 	}
+	matches = dropPlaceholders(matches)
 	matches = dedupe(matches)
 	matches = enforceEndpointPolicy(matches, endpoint, reg)
 	matches = suppressOverridden(matches)
 	return suppressConsumedUnknowns(matches)
+}
+
+// dropPlaceholders removes a match whose secret is the redact mode's own
+// placeholder. A name-shaped recognizer takes any value under a credential
+// variable, so without this a redacted file reads as a credential again.
+func dropPlaceholders(in []Match) []Match {
+	out := in[:0]
+	for _, m := range in {
+		if m.Secret == redact.Placeholder || strings.Contains(m.Secret, redact.Placeholder) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // enforceEndpointPolicy is the single chokepoint for every URL a credential may

@@ -99,7 +99,7 @@ func recognizeGenericSecret(b parse.Blob, _ string, _ *module.Registry) []recogn
 	return out
 }
 
-var placeholderRe = regexp.MustCompile(`(?i)^(changeme|change_me|password|secret|example|your[_-].*|xxx+|\.+|none|null|true|false|placeholder|todo|test|dummy|redacted|<.*>|\$\{?.*)$`)
+var placeholderRe = regexp.MustCompile(`(?i)^(changeme|change_me|password|secret|example|your[_-].*|xxx+|\.+|none|null|true|false|placeholder|todo|test|dummy|redacted([-_].*)?|<.*>|\$\{?.*)$`)
 
 // Shapes that are identifiers or metadata rather than credentials. A config
 // sitting beside a real token is full of these, and reporting them buries the
