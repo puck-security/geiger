@@ -112,107 +112,39 @@ geiger --live --min-footprint --proxy socks5://127.0.0.1:9050 .env
 geiger --live --json ./repo | jq .
 ```
 
-**Go deeper — `--intrusive`** (doesn't modify resources, but leaves a trail):
-connects to databases (Postgres, MySQL, MongoDB, Redis, SQL Server, Oracle,
-ClickHouse, Cassandra — fixed catalog queries, read-only session), reads local
-SQLite/IDE stores in place, hits cluster APIs, **redeems cached user refresh
-tokens** (Azure / GCP sessions) to map their reach — an active sign-in that shows
-in the tenant's audit log — and **follows secrets-store reads**, draining
-Vault/Doppler/1Password/cloud secret managers (AWS SM, GCP SM, Azure Key Vault) and
-recursively triaging each extracted secret. The same fan-out a worm performs, so
-you see the *real* blast radius. Plain `--live` stays read-only: it uses a still-valid
-cached token but never redeems a refresh token.
+**Go deeper — `--intrusive`** (read-only, but it leaves a trail). It connects to
+databases (Postgres, MySQL, MongoDB, Redis, SQL Server, Oracle, ClickHouse,
+Cassandra) with fixed queries, reads local SQLite and IDE stores in place, and
+calls cluster APIs. It follows secrets-store reads, draining Vault, Doppler,
+1Password, and the cloud secret managers (AWS SM, GCP SM, Azure Key Vault) and
+triaging each value. It also redeems cached Azure and GCP refresh tokens to map
+their reach, which writes a sign-in to the audit log. This is the fan-out a worm
+performs, so you see the *real* blast radius. Plain `--live` stays read-only and
+never redeems a refresh token.
 
 ```sh
 geiger --live --intrusive .env
 ```
 
-**AWS, deeper — `--aws-intrusive`** (separate from `--intrusive`): reads the
-account IAM graph in one `GetAccountAuthorizationDetails` call, unrolls where the
-key's own power comes from (group membership and attached/inline policies), and
-reads every role's trust policy to find roles the key can assume and roles that
-trust outside accounts. It is split from `--intrusive` because it leaves a lot of
-CloudTrail. For an AWS SSO session, `--aws-assume` turns the session into real STS
-credentials for the accounts and roles you name (or `all`) and runs the full key
-characterization inside each account. Minted credentials stay in memory, are
-registered with the output scrubber so they never print, and are never written to
-disk. Minting needs `--live` and an explicit target.
+**Deeper, per service — `--<service>-intrusive`.** Each major provider has a
+read-only deep tier. It shows what a leaked credential can *do*, not only what it
+can see. The flags table lists every flag. These tiers are separate from
+`--intrusive` because they are call-heavy and specific to one provider.
+
+- **AWS, GCP, Azure** map the IAM blast radius: privilege-escalation paths,
+  assumable and cross-account roles, admin roles, and effective permissions.
+- **Okta, Vault, GitHub, GitLab, Slack, Snowflake, Cloudflare** size real reach:
+  user-directory and SSO-app access, secret-engine mounts, CI/CD secret names,
+  visible channels, reachable databases, and controlled domains.
+
+Secret values are never printed; the CI-secret tiers return names only. AWS
+`--aws-assume` mints STS credentials for an SSO session, keeps them in memory, and
+scrubs them from output. The tiers that redeem a refresh token (GCP ADC, Azure)
+write a provider sign-in log.
 
 ```sh
 geiger --live --aws-intrusive ~/.aws/credentials
 geiger --live --aws-assume 123456789012/AdminRole ~/.aws/sso/cache
-```
-
-**Slack, deeper — `--slack-intrusive`**: a Slack token's scopes come back for free
-in the `auth.test` response header, so `--live` already reports what the token can
-do (admin, `chat:write` impersonation, `search:read`, history, file and email
-access). `--slack-intrusive` adds the reach: workspace, member count, visible
-channels (flagging private ones), and file count. Read-only throughout; no message
-is ever posted.
-
-```sh
-geiger --live --slack-intrusive .env
-```
-
-**GitHub, deeper — `--github-intrusive`**: plain `--live` already reports the
-token's scopes, accessible repos, write/admin counts, and org-admin roles.
-`--github-intrusive` adds the names of Actions secrets at the org level and on
-administered repos (values are never returned by the API, but the names show
-which systems CI is wired to), org member counts, and, for a GitHub App
-installation token, how many repositories it can act on.
-
-```sh
-geiger --live --github-intrusive .env
-```
-
-**GitLab, deeper — `--gitlab-intrusive`**: plain `--live` reports the token's
-scopes (`api` and `sudo` are the dangerous ones), instance-admin status, and the
-token user. `--gitlab-intrusive` adds reach: project and group counts (exact when
-GitLab returns the total), how many the token can maintain, and the keys of
-CI/CD variables on projects and groups it maintains. GitLab returns variable
-values on that endpoint; geiger surfaces only the keys and discards the values.
-
-```sh
-geiger --live --gitlab-intrusive .env
-```
-
-**GCP, deeper — `--gcp-intrusive`**: plain `--live` reports the identity and how
-many projects a GCP credential (service-account key, instance token, or gcloud
-ADC) can reach, and `--intrusive` drains Secret Manager. `--gcp-intrusive` adds
-the IAM blast radius: it probes `testIamPermissions` (read-only, needs no
-permission to call) across reachable projects and reports what the identity can
-actually do — privilege escalation (service-account impersonation, key creation,
-`setIamPolicy`, role edits), code execution and deploy, and data access. For a
-gcloud ADC refresh token it also performs the token grant needed to run the
-assessment.
-
-```sh
-geiger --live --gcp-intrusive ~/.config/gcloud/application_default_credentials.json
-```
-
-**Azure, deeper — `--azure-intrusive`**: plain `--live` reads the Entra identity,
-tenant, and subscription count from a cached `az` token, and `--intrusive` drains
-Key Vault. `--azure-intrusive` adds the IAM blast radius: it mints Graph and ARM
-tokens from the refresh token and reports the Entra directory roles the identity
-holds (Global Administrator and the like) and its Azure RBAC assignments (Owner,
-User Access Administrator, Contributor) across subscriptions. Redeeming the
-refresh token writes an Entra sign-in log.
-
-```sh
-geiger --live --azure-intrusive ~/.azure/msal_token_cache.json
-```
-
-**Identity and secret stores, deeper.** The same pattern extends to the services
-whose blast radius is privilege rather than a resource count. `--okta-intrusive`
-reports whether an Okta token can read the user directory, which SSO apps it
-fronts, and whether it holds admin. `--azure-intrusive` also decodes an Entra
-service principal's app permissions. `--vault-intrusive` lists a Vault token's
-secret-engine mounts and probes its read capability on them. `--snowflake-intrusive`
-reports reachable databases and the roles a user holds. `--cloudflare-intrusive`
-names the domains a token controls and probes Workers and R2 access. All are
-read-only.
-
-```sh
 geiger --live --okta-intrusive --endpoint https://acme.okta.com .env
 ```
 
