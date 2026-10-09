@@ -101,20 +101,43 @@ func (m awsKey) Recon(ctx context.Context, c *recon.Client, _ module.Token, f mo
 		})
 	}
 
-	// 5. privesc edges — iam:SimulatePrincipalPolicy (read-only).
+	// 5. privesc edges + direct-reach capabilities — iam:SimulatePrincipalPolicy.
+	//    One call, so it rides the default --live depth.
 	if callerARN != "" {
 		out = append(out, m.privesc(ctx, c, f, callerARN)...)
+	}
+
+	// 6-8. Deep IAM reads are call-heavy and noisy, so they are gated behind
+	//      --aws-intrusive: the whole-account graph, the caller's grant
+	//      provenance, and the role trust graph.
+	if c.AWSIntrusive() && callerARN != "" {
+		if fnd, ok := m.accountAuthDetails(ctx, c, f); ok {
+			out = append(out, fnd)
+		}
+		out = append(out, m.selfGrants(ctx, c, f, callerARN)...)
+		out = append(out, m.roleGraph(ctx, c, f, callerARN)...)
 	}
 
 	// Make the negative space legible: a valid key whose every reach probe was
 	// denied or empty otherwise renders as a bare identity, which reads as "narrow
 	// and safe" when geiger simply found no access it could prove read-only.
 	if callerARN != "" && len(out) == base {
+		probed := "IAM alias, S3, Secrets Manager, privesc"
+		if c.AWSIntrusive() {
+			probed += ", account authorization, role graph"
+		}
 		out = append(out, module.Finding{
 			Key:   "reach",
-			Value: "identity only — read-only probes (IAM alias, S3, Secrets Manager, privesc) surfaced no further access",
+			Value: "identity only — read-only probes (" + probed + ") surfaced no further access",
 			Flag:  module.FlagInfo,
 		})
+	}
+
+	// Key metadata, independent of resource reach: a dormant long-term key is a
+	// finding even when it reaches nothing, so it is appended after the
+	// negative-space check and must not suppress it.
+	if fnd, ok := m.accessKeyLastUsed(ctx, c, f); ok {
+		out = append(out, fnd)
 	}
 	return out, nil
 }

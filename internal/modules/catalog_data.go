@@ -26,20 +26,9 @@ func init() {
 // --- Snowflake: PAT/OAuth bearer; a fixed read-only SELECT proves identity ---
 
 func registerSnowflake() {
-	add("", r.HTTP{
-		ModuleName: "snowflake", Endpoint: saasOnly("snowflakecomputing.com", "snowflakecomputing.cn"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Bearer},
-		Headers: map[string]string{"X-Snowflake-Authorization-Token-Type": "PROGRAMMATIC_ACCESS_TOKEN"},
-		// SELECT CURRENT_USER()/CURRENT_ROLE() is read-only by construction (a
-		// fixed query), so it's an opted-in read POST like STS/k8s rules-review.
-		Whoami: r.Call{Method: "POST", Path: "/api/v2/statements", ReadOnlyPOST: true,
-			Body:    `{"statement":"SELECT CURRENT_USER(), CURRENT_ROLE()","timeout":60}`,
-			Fields:  []r.Extract{{Key: "user", Path: "data.0.0"}, {Key: "role", Path: "data.0.1"}},
-			Signals: []r.Signal{{Path: "data.0.1", Regex: "(?i)ACCOUNTADMIN|SECURITYADMIN|SYSADMIN", Key: "privilege", Value: "high-privilege role (account/security/sysadmin)", Flag: fmFlag}}},
-		Static: []module.Finding{{Key: "reach", Value: "query and modify warehouses, databases, and schemas; ACCOUNTADMIN reaches the entire account (all data, users, network policies)", Flag: fmFlag}},
-		Summarize: func([]module.Finding) string {
-			return "Snowflake — data-warehouse access (account-wide at ACCOUNTADMIN)"
-		},
-	}.Module())
+	// Snowflake is handled by the custom module in snowflake.go (SQL-API identity
+	// + --snowflake-intrusive database/role enumeration); this registers only its
+	// recognizer.
 	recognize.RegisterRecognizer(func(b parse.Blob, endpoint string, _ *module.Registry) []recognize.Match {
 		tok := firstVar(b.Vars, "SNOWFLAKE_TOKEN", "SNOWFLAKE_PAT", "SNOWFLAKE_PROGRAMMATIC_ACCESS_TOKEN", "SNOWSQL_PWD")
 		if tok == "" {

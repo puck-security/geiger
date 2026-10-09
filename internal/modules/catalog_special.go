@@ -6,20 +6,9 @@ import (
 )
 
 func init() {
-	// ---- Slack: auth.test (read-only) ----
-	slack := r.HTTP{
-		ModuleName: "slack", Base: "https://slack.com/api", Auth: r.AuthSpec{Kind: r.Bearer},
-		Whoami: r.GET("/auth.test").Field("workspace", "url").Field("team", "team").
-			Field("user", "user").Field("bot-id", "bot_id"),
-		Summarize: func(fs []module.Finding) string { return "valid Slack token — workspace reachable" },
-	}.Module()
-	for _, rule := range []string{
-		"slack-bot-token", "slack-user-token", "slack-app-token", "slack-legacy-bot-token",
-		"slack-legacy-token", "slack-legacy-workspace-token", "slack-config-access-token",
-	} {
-		module.MapRule(rule, "slack")
-	}
-	module.Register(slack)
+	// ---- Slack: custom module (auth.test + scope/impact analysis) ----
+	// Registered in slack.go; it reads the X-OAuth-Scopes header and does the
+	// --slack-intrusive reach fan-out, which the declarative recipe can't.
 
 	// ---- Telegram: token in URL path ----
 	add("telegram-bot-api-token", r.HTTP{

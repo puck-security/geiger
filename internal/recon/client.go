@@ -90,15 +90,26 @@ type CallOpts struct {
 
 // Client is the read-only-enforcing HTTP client.
 type Client struct {
-	http         *http.Client
-	live         bool
-	intrusive    bool
-	minFootprint bool
-	correlate    bool
-	spawnStdio   bool
-	trace        bool
-	planned      []PlannedCall
-	secrets      []secretRepl // known secrets and what to display them as
+	http            *http.Client
+	live            bool
+	intrusive       bool
+	minFootprint    bool
+	correlate       bool
+	spawnStdio      bool
+	awsIntrusive    bool
+	awsAssume       string
+	slackIntrusive  bool
+	githubIntrusive bool
+	gitlabIntrusive bool
+	gcpIntrusive    bool
+	azureIntrusive  bool
+	oktaIntrusive   bool
+	vaultIntrusive  bool
+	snowIntrusive   bool
+	cfIntrusive     bool
+	trace           bool
+	planned         []PlannedCall
+	secrets         []secretRepl // known secrets and what to display them as
 }
 
 type secretRepl struct{ value, repl string }
@@ -174,6 +185,93 @@ func (c *Client) SetSpawnStdio(v bool) { c.spawnStdio = v }
 // SpawnStdio reports whether running local stdio servers is permitted. A caller
 // must check this AND Live before starting any process.
 func (c *Client) SpawnStdio() bool { return c.spawnStdio }
+
+// SetAWSIntrusive permits the deep, call-heavy AWS reads: the full account
+// IAM graph, self-grant unroll, and role trust graph. Kept separate from
+// --intrusive because these generate substantial CloudTrail across the account.
+func (c *Client) SetAWSIntrusive(v bool) { c.awsIntrusive = v }
+
+// AWSIntrusive reports whether deep AWS IAM reads are permitted.
+func (c *Client) AWSIntrusive() bool { return c.awsIntrusive }
+
+// SetAWSAssume sets the target spec for minting credentials from an AWS SSO
+// session: "all", "ACCOUNT", "ACCOUNT/ROLE", or a comma-separated list. Empty
+// means never mint. Minting requires AWSIntrusive and Live.
+func (c *Client) SetAWSAssume(v string) { c.awsAssume = v }
+
+// AWSAssume returns the SSO assume-into target spec ("" = do not mint).
+func (c *Client) AWSAssume() string { return c.awsAssume }
+
+// SetSlackIntrusive permits the deeper Slack reach enumeration (workspace,
+// users, channels, files). Off by default; the CLI turns it on with
+// --slack-intrusive. Scope-derived capability findings stay in default --live.
+func (c *Client) SetSlackIntrusive(v bool) { c.slackIntrusive = v }
+
+// SlackIntrusive reports whether deep Slack enumeration is permitted.
+func (c *Client) SlackIntrusive() bool { return c.slackIntrusive }
+
+// SetGitHubIntrusive permits the deeper GitHub reach enumeration: org member
+// counts, org and repo Actions secret names, and installation-token repo reach.
+// Off by default; the CLI turns it on with --github-intrusive.
+func (c *Client) SetGitHubIntrusive(v bool) { c.githubIntrusive = v }
+
+// GitHubIntrusive reports whether deep GitHub enumeration is permitted.
+func (c *Client) GitHubIntrusive() bool { return c.githubIntrusive }
+
+// SetGitLabIntrusive permits the deeper GitLab reach enumeration: project and
+// group counts, maintainer/owner reach, and CI/CD variable keys. Off by
+// default; the CLI turns it on with --gitlab-intrusive.
+func (c *Client) SetGitLabIntrusive(v bool) { c.gitlabIntrusive = v }
+
+// GitLabIntrusive reports whether deep GitLab enumeration is permitted.
+func (c *Client) GitLabIntrusive() bool { return c.gitlabIntrusive }
+
+// SetGCPIntrusive permits the deeper GCP reach assessment: probing effective
+// IAM permissions (privilege escalation, code execution, data access) across
+// reachable projects via testIamPermissions, and for gcloud ADC it also permits
+// the refresh-token redemption needed to obtain a token. The CLI turns it on
+// with --gcp-intrusive.
+func (c *Client) SetGCPIntrusive(v bool) { c.gcpIntrusive = v }
+
+// GCPIntrusive reports whether the deep GCP IAM assessment is permitted.
+func (c *Client) GCPIntrusive() bool { return c.gcpIntrusive }
+
+// SetAzureIntrusive permits the deeper Azure reach assessment: Entra directory
+// roles and Azure RBAC role assignments. It also permits the public-client
+// refresh-token redemption needed to mint the Graph and ARM tokens. The CLI
+// turns it on with --azure-intrusive.
+func (c *Client) SetAzureIntrusive(v bool) { c.azureIntrusive = v }
+
+// AzureIntrusive reports whether the deep Azure assessment is permitted.
+func (c *Client) AzureIntrusive() bool { return c.azureIntrusive }
+
+// SetOktaIntrusive permits the deep Okta assessment (directory/app enumeration,
+// admin-access probe). The CLI turns it on with --okta-intrusive.
+func (c *Client) SetOktaIntrusive(v bool) { c.oktaIntrusive = v }
+
+// OktaIntrusive reports whether the deep Okta assessment is permitted.
+func (c *Client) OktaIntrusive() bool { return c.oktaIntrusive }
+
+// SetVaultIntrusive permits the deep Vault assessment (mount inventory and
+// path-capability probe). The CLI turns it on with --vault-intrusive.
+func (c *Client) SetVaultIntrusive(v bool) { c.vaultIntrusive = v }
+
+// VaultIntrusive reports whether the deep Vault assessment is permitted.
+func (c *Client) VaultIntrusive() bool { return c.vaultIntrusive }
+
+// SetSnowflakeIntrusive permits the deep Snowflake assessment (role grants and
+// reachable database inventory). The CLI turns it on with --snowflake-intrusive.
+func (c *Client) SetSnowflakeIntrusive(v bool) { c.snowIntrusive = v }
+
+// SnowflakeIntrusive reports whether the deep Snowflake assessment is permitted.
+func (c *Client) SnowflakeIntrusive() bool { return c.snowIntrusive }
+
+// SetCloudflareIntrusive permits the deep Cloudflare assessment (zone/account
+// names and Workers/R2 reach). The CLI turns it on with --cloudflare-intrusive.
+func (c *Client) SetCloudflareIntrusive(v bool) { c.cfIntrusive = v }
+
+// CloudflareIntrusive reports whether the deep Cloudflare assessment is permitted.
+func (c *Client) CloudflareIntrusive() bool { return c.cfIntrusive }
 
 // SetCorrelate enables reading bounded local hints (SSH config/known_hosts/
 // shell history) to correlate keys to candidate hosts.

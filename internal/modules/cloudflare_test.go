@@ -1,12 +1,16 @@
 package modules
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
 	"github.com/puck-security/geiger/internal/parse"
 	"github.com/puck-security/geiger/internal/recognize"
+	"github.com/puck-security/geiger/internal/recon"
 )
 
 func TestCloudflareRecognizer(t *testing.T) {
@@ -82,5 +86,44 @@ func TestCloudflareRecon(t *testing.T) {
 	}
 	if got["email"].Value != "ops@acme.com" {
 		t.Errorf("identity not characterized: %+v", got)
+	}
+}
+
+func TestCloudflareIntrusiveDomainsAndWorkers(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/client/v4/user/tokens/verify", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"result":{"status":"active"}}`)
+	})
+	mux.HandleFunc("/client/v4/accounts", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"result":[{"id":"acc1"}],"result_info":{"total_count":1}}`)
+	})
+	mux.HandleFunc("/client/v4/zones", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"result":[{"name":"acme.com"},{"name":"acme.io"}],"result_info":{"total_count":2}}`)
+	})
+	mux.HandleFunc("/client/v4/user", func(w http.ResponseWriter, r *http.Request) { respond(w, `{"result":{"email":"ops@acme.com"}}`) })
+	mux.HandleFunc("/client/v4/accounts/acc1/workers/scripts", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"result":[{"id":"s1"},{"id":"s2"}]}`)
+	})
+	mux.HandleFunc("/client/v4/accounts/acc1/r2/buckets", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, `{"result":{"buckets":[{"name":"b1"}]}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	hc := &http.Client{Transport: rewriteTransport{base: srv.Listener.Addr().String(), rt: http.DefaultTransport}}
+	c := recon.New(hc, true)
+	c.SetCloudflareIntrusive(true)
+	fs, err := cloudflareKey{}.Recon(context.Background(), c, module.Token{}, module.Fields{"token": "CFTOK"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := indexByKey(fs)
+	if got["domains"].Flag != module.FlagForceMultiplier || !strings.Contains(got["domains"].Value, "acme.com") {
+		t.Errorf("domains finding wrong: %+v", got["domains"])
+	}
+	if got["workers"].Flag != module.FlagForceMultiplier || !strings.Contains(got["workers"].Value, "2 Worker") {
+		t.Errorf("workers finding wrong: %+v", got["workers"])
+	}
+	if got["r2"].Value != "1 R2 buckets" {
+		t.Errorf("r2 finding wrong: %+v", got["r2"])
 	}
 }

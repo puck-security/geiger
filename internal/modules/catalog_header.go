@@ -49,30 +49,14 @@ func init() {
 	module.MapRule("shopify-private-app-access-token", "shopify")
 
 	// ---- Cloud / infra ----
-	add("cloudflare-api-key", r.HTTP{
-		ModuleName: "cloudflare", Base: "https://api.cloudflare.com/client/v4", Auth: r.AuthSpec{Kind: r.Bearer},
-		// /user/tokens/verify is user-scoped and 401s for account/zone-scoped
-		// tokens that are still live against /zones — keep probing past that 401.
-		MultiScope: true,
-		Whoami:     r.GET("/user/tokens/verify").Field("token-status", "result.status").Field("token-id", "result.id"),
-		// Blast radius (each call may 403 on a scoped token — geiger skips those):
-		// reachable accounts, zones (DNS surface), and best-effort identity.
-		Calls: []r.Call{
-			r.GET("/accounts").CountFrom("result_info.total_count", "accounts"),
-			r.GET("/zones").CountFrom("result_info.total_count", "zones"),
-			r.GET("/user").Field("email", "result.email"),
-		},
-	}.Module())
+	// Cloudflare API tokens are handled by the custom module in cloudflare.go
+	// (verify + account/zone reach, and --cloudflare-intrusive domain/Workers/R2
+	// reach). The legacy global key stays a recipe below.
 
 	// ---- VCS / CI ----
-	add("gitlab-pat", r.HTTP{
-		ModuleName: "gitlab", Base: "https://gitlab.com/api/v4", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "PRIVATE-TOKEN"},
-		Whoami: r.GET("/personal_access_tokens/self").FlagField("scopes", "scopes", fmFlag).Field("name", "name").Field("expires", "expires_at"),
-		Calls:  []r.Call{r.GET("/user").Field("username", "username")},
-	}.Module())
-	for _, rule := range []string{"gitlab-pat-routable", "gitlab-deploy-token", "gitlab-feed-token", "gitlab-ptt", "gitlab-rrt"} {
-		module.MapRule(rule, "gitlab")
-	}
+	// GitLab PATs and related tokens are handled by the custom module in
+	// gitlab.go (scope/impact analysis + --gitlab-intrusive reach), which the
+	// declarative recipe can't express.
 	add("gitlab-cicd-job-token", r.HTTP{
 		ModuleName: "gitlab_ci_token", Base: "https://gitlab.com/api/v4", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "JOB-TOKEN"},
 		Whoami: r.GET("/job").Field("job", "name"),
@@ -201,19 +185,11 @@ func init() {
 	}.Module())
 
 	// ---- Secrets / identity ----
-	add("vault-service-token", r.HTTP{
-		ModuleName: "vault", Endpoint: selfHosted, Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "X-Vault-Token"},
-		Whoami: r.GET("/v1/auth/token/lookup-self").Field("display_name", "data.display_name").
-			FlagField("policies", "data.policies", fmFlag).Field("ttl", "data.ttl"),
-		Static: []module.Finding{{Key: "note", Value: "root/* policy = total compromise; any secret-engine read = secrets-store reach", Flag: infoFlag}},
-	}.Module())
-	module.MapRule("vault-batch-token", "vault")
+	// Vault is handled by the custom module in vault.go (lookup-self +
+	// --vault-intrusive mount/capability probe), which the recipe can't express.
 
-	add("okta-access-token", r.HTTP{
-		ModuleName: "okta", Endpoint: saasOnly("okta.com", "oktapreview.com", "okta-emea.com", "okta-gov.com"), Base: "{endpoint}", Auth: r.AuthSpec{Kind: r.Header, HeaderName: "Authorization", ValuePrefix: "SSWS "},
-		Whoami: r.GET("/api/v1/users/me").Field("login", "profile.login").Field("status", "status"),
-		Static: []module.Finding{{Key: "note", Value: "SSWS inherits creating admin's rights; super_admin = IdP takeover", Flag: infoFlag}},
-	}.Module())
+	// Okta is handled by the custom module in okta.go (identity + --okta-intrusive
+	// directory/app/admin reach), which the declarative recipe can't express.
 
 	// ---- Data platforms ----
 	add("databricks-api-token", r.HTTP{

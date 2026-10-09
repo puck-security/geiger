@@ -139,22 +139,8 @@ func registerAlgolia() {
 
 // ---- Entra/Azure service principal: client_credentials ----
 func registerEntra() {
-	add("azure-ad-client-secret", r.HTTP{
-		ModuleName: "entra_sp", Base: "https://graph.microsoft.com/v1.0", Auth: r.AuthSpec{Kind: r.PreAuthed},
-		Authenticate: func(ctx context.Context, c *recon.Client, f module.Fields) (module.Token, error) {
-			tokenURL := "https://login.microsoftonline.com/" + f["tenant"] + "/oauth2/v2.0/token"
-			return auth.ClientCredentials(ctx, c, tokenURL, f["client_id"], f["client_secret"],
-				url.Values{"scope": {"https://graph.microsoft.com/.default"}})
-		},
-		Whoami: r.GET("/organization").Field("tenant", "value.0.displayName").Field("tenant-id", "value.0.id"),
-		Static: []module.Finding{{Key: "note", Value: "decode token roles claim; Directory.ReadWrite.All = force multiplier", Flag: infoFlag}},
-		Harvest: func(ctx context.Context, c *recon.Client, _ module.Token, f module.Fields) ([]module.Harvested, error) {
-			if !c.Live() || !c.Intrusive() {
-				return nil, nil
-			}
-			return azureVaultHarvestSP(ctx, c, f["tenant"], f["client_id"], f["client_secret"]), nil
-		},
-	}.Module())
+	// entra_sp is handled by the custom module in entra_sp.go (app-permission
+	// decode + --azure-intrusive RBAC); this registers only its recognizer.
 	recognize.RegisterRecognizer(func(b parse.Blob, endpoint string, _ *module.Registry) []recognize.Match {
 		id := firstVar(b.Vars, "AZURE_CLIENT_ID", "ARM_CLIENT_ID")
 		secret := firstVar(b.Vars, "AZURE_CLIENT_SECRET", "ARM_CLIENT_SECRET")

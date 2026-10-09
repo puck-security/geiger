@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -83,7 +84,120 @@ func (m awsSSO) Recon(ctx context.Context, c *recon.Client, _ module.Token, f mo
 	if len(adminOn) > 0 {
 		out = append(out, module.Finding{Key: "admin", Value: "AdministratorAccess on " + strings.Join(adminOn, ", "), Flag: module.FlagForceMultiplier})
 	}
+
+	// --aws-assume: turn the SSO session into real STS credentials for the
+	// selected account/role targets and run the full AWS key characterization
+	// against each. This is the deepest SSO reach there is — it exercises the
+	// account from the inside — so it needs both --aws-intrusive and a target.
+	if c.AWSAssume() != "" && c.AWSIntrusive() {
+		out = append(out, m.assumeAndCharacterize(ctx, c, base, f["access_token"], accounts, c.AWSAssume())...)
+	}
 	return out, nil
+}
+
+type assumeTarget struct{ account, role string }
+
+type stsCreds struct{ ak, sk, st string }
+
+// assumeAndCharacterize mints STS credentials for each resolved target and runs
+// awsKey.Recon against them, labelling every sub-finding with its role@account.
+func (m awsSSO) assumeAndCharacterize(ctx context.Context, c *recon.Client, base, token string, accounts []ssoAccount, spec string) []module.Finding {
+	targets := m.resolveTargets(ctx, c, base, token, accounts, spec)
+	if len(targets) == 0 {
+		return nil
+	}
+	out := []module.Finding{{
+		Key:   "assume",
+		Value: fmt.Sprintf("minting STS credentials for %d account/role target(s)", len(targets)),
+		Flag:  module.FlagInfo,
+	}}
+	minted := 0
+	for _, t := range targets {
+		creds := m.getRoleCredentials(ctx, c, base, token, t.account, t.role)
+		if creds == nil {
+			continue
+		}
+		minted++
+		label := t.role + "@" + t.account
+		sub, _ := awsKey{}.Recon(ctx, c, module.Token{}, module.Fields{
+			"access_key": creds.ak, "secret_key": creds.sk, "session_token": creds.st,
+		})
+		for _, sf := range sub {
+			sf.Value = "[" + label + "] " + sf.Value
+			out = append(out, sf)
+		}
+	}
+	if minted == 0 {
+		out = append(out, module.Finding{Key: "assume", Value: "no credentials minted (targets denied or no roles)", Flag: module.FlagInfo})
+	}
+	return out
+}
+
+// resolveTargets expands the spec into concrete (account, role) pairs. "all"
+// and a bare account id fan out to every role in those accounts via
+// sso:ListAccountRoles; "ACCOUNT/ROLE" is taken as-is.
+func (m awsSSO) resolveTargets(ctx context.Context, c *recon.Client, base, token string, accounts []ssoAccount, spec string) []assumeTarget {
+	var out []assumeTarget
+	seen := map[string]bool{}
+	add := func(acct, role string) {
+		k := acct + "/" + role
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, assumeTarget{acct, role})
+		}
+	}
+	addAllRoles := func(acct string) {
+		for _, r := range m.listRoles(ctx, c, base, token, acct) {
+			add(acct, r)
+		}
+	}
+	for _, raw := range strings.Split(spec, ",") {
+		t := strings.TrimSpace(raw)
+		switch {
+		case t == "":
+			continue
+		case strings.EqualFold(t, "all"):
+			for _, a := range accounts {
+				addAllRoles(a.id)
+			}
+		case strings.ContainsRune(t, '/'):
+			i := strings.IndexByte(t, '/')
+			add(t[:i], t[i+1:])
+		default:
+			addAllRoles(t)
+		}
+	}
+	return out
+}
+
+// getRoleCredentials calls the SSO portal to exchange the bearer token for
+// temporary STS credentials for one account/role. The minted secret and session
+// token are registered with the scrubber so they cannot leak into recorded
+// calls. In dry-run the portal returns nothing, so nothing is minted.
+func (m awsSSO) getRoleCredentials(ctx context.Context, c *recon.Client, base, token, account, role string) *stsCreds {
+	u := base + "/federation/credentials?role_name=" + url.QueryEscape(role) + "&account_id=" + url.QueryEscape(account)
+	req, _ := recon.NewRequest(ctx, http.MethodGet, u, nil)
+	req.Header.Set("x-amz-sso_bearer_token", token)
+	resp, err := c.Do(req, recon.CallOpts{Note: "sso:GetRoleCredentials (mints temporary STS credentials)"})
+	if err != nil || resp.DryRun || resp.Status >= 300 {
+		return nil
+	}
+	d := jsonDecode(resp.Body)
+	rc, _ := d["roleCredentials"].(map[string]any)
+	if rc == nil {
+		return nil
+	}
+	ak, _ := rc["accessKeyId"].(string)
+	sk, _ := rc["secretAccessKey"].(string)
+	st, _ := rc["sessionToken"].(string)
+	if ak == "" || sk == "" {
+		return nil
+	}
+	c.RegisterSecret(sk)
+	if st != "" {
+		c.RegisterSecret(st)
+	}
+	return &stsCreds{ak: ak, sk: sk, st: st}
 }
 
 func (m awsSSO) Summarize(title string, fs []module.Finding) module.Note {

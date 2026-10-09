@@ -37,6 +37,9 @@ var version = "dev"
 type config struct {
 	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, gitHistory, verbose, stream, quiet, noReverse, useMetadata, browser, allExts, spawnStdio bool
 	redact, confirmRedact                                                                                                                                            bool
+	awsIntrusive, slackIntrusive, githubIntrusive, gitlabIntrusive, gcpIntrusive, azureIntrusive                                                                     bool
+	oktaIntrusive, vaultIntrusive, snowIntrusive, cfIntrusive                                                                                                        bool
+	awsAssume                                                                                                                                                        string
 	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                                                   string
 	userAgent, minSeverity, output, replacements                                                                                                                     string
 	timeout                                                                                                                                                          time.Duration
@@ -54,6 +57,17 @@ func main() {
 	flag.BoolVar(&c.useEnv, "env", false, "read credentials from the current environment variables")
 	flag.BoolVar(&c.useMetadata, "metadata", false, "harvest cloud instance-metadata credentials (AWS/GCP/Azure/k8s/…) and triage them (requires --live)")
 	flag.BoolVar(&c.spawnStdio, "spawn-stdio", false, "enumerate local stdio MCP servers by RUNNING each configured command (requires --live; executes third-party code from the scanned config)")
+	flag.BoolVar(&c.awsIntrusive, "aws-intrusive", false, "deep AWS IAM reads: full account authorization graph, self-grant unroll, and role trust graph (requires --live; heavy CloudTrail)")
+	flag.StringVar(&c.awsAssume, "aws-assume", "", "for an AWS SSO session, mint STS credentials and characterize each target: 'all', 'ACCOUNT', 'ACCOUNT/ROLE', or a comma-separated list (implies --aws-intrusive; requires --live)")
+	flag.BoolVar(&c.slackIntrusive, "slack-intrusive", false, "deeper Slack reach enumeration: workspace, users, channels, and files visible to the token (requires --live; token scopes are reported without it)")
+	flag.BoolVar(&c.githubIntrusive, "github-intrusive", false, "deeper GitHub reach: org member counts, org/repo Actions secret names, and installation-token repo reach (requires --live)")
+	flag.BoolVar(&c.gitlabIntrusive, "gitlab-intrusive", false, "deeper GitLab reach: project/group counts, maintainer/owner reach, and CI/CD variable keys (requires --live)")
+	flag.BoolVar(&c.gcpIntrusive, "gcp-intrusive", false, "deeper GCP reach: probe effective IAM permissions (privilege escalation, code execution, data access) across reachable projects; for gcloud ADC also redeems the refresh token (requires --live)")
+	flag.BoolVar(&c.azureIntrusive, "azure-intrusive", false, "deeper Azure reach: Entra directory roles and Azure RBAC role assignments across subscriptions; redeems the az refresh token to mint Graph/ARM tokens; also probes an Entra service principal's app permissions (requires --live)")
+	flag.BoolVar(&c.oktaIntrusive, "okta-intrusive", false, "deeper Okta reach: enumerate users and SSO apps and probe admin access (requires --live)")
+	flag.BoolVar(&c.vaultIntrusive, "vault-intrusive", false, "deeper Vault reach: list secret-engine mounts and probe path capabilities (requires --live)")
+	flag.BoolVar(&c.snowIntrusive, "snowflake-intrusive", false, "deeper Snowflake reach: role grants and reachable database inventory (requires --live)")
+	flag.BoolVar(&c.cfIntrusive, "cloudflare-intrusive", false, "deeper Cloudflare reach: zone/account names and Workers/R2 access (requires --live)")
 	flag.BoolVar(&c.browser, "browser", false, "model malicious-browser-extension impact: score installed Chrome/Edge extensions' permissions and (with --live --intrusive) inventory the live sessions they'd reach")
 	flag.BoolVar(&c.allExts, "all", false, "with --browser, list every extension (incl. narrow/benign ones) instead of collapsing them into a count")
 	flag.StringVar(&c.endpoint, "endpoint", "", "tenant/instance/host for set-shaped credentials")
@@ -189,17 +203,78 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 		if c.spawnStdio && c.live {
 			fmt.Fprintln(stderr, "geiger: --spawn-stdio enabled — will EXECUTE each configured stdio MCP server command to enumerate its tools.")
 		}
+		if c.awsIntrusive && c.live {
+			fmt.Fprintln(stderr, "geiger: --aws-intrusive enabled — will read the full account IAM graph and role trust graph (heavy CloudTrail).")
+		}
+		if c.awsAssume != "" && c.live {
+			if c.awsAssume == "all" {
+				fmt.Fprintln(stderr, "geiger: --aws-assume=all — will MINT temporary STS credentials for every account/role an SSO session can reach and characterize each, generating CloudTrail across those accounts. Raise --timeout for large account sets.")
+			} else {
+				fmt.Fprintln(stderr, "geiger: --aws-assume enabled — will MINT temporary STS credentials for the selected account/role targets and characterize each.")
+			}
+		}
 	}
 	// A gate that silently does nothing is worse than one that explains itself.
 	if c.spawnStdio && !c.live && !c.quiet {
 		fmt.Fprintln(stderr, "geiger: --spawn-stdio requires --live; stdio servers will be typed from their config only.")
 	}
+	if (c.awsIntrusive || c.awsAssume != "") && !c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --aws-intrusive/--aws-assume require --live; AWS recon will stay at the default depth.")
+	}
+	if c.slackIntrusive && !c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --slack-intrusive requires --live; Slack recon will stay at the default depth.")
+	}
+	if c.githubIntrusive && !c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --github-intrusive requires --live; GitHub recon will stay at the default depth.")
+	}
+	if c.gitlabIntrusive && !c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --gitlab-intrusive requires --live; GitLab recon will stay at the default depth.")
+	}
+	if c.gcpIntrusive && c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --gcp-intrusive enabled — will probe effective IAM permissions across reachable projects (and redeem a gcloud ADC refresh token if present).")
+	}
+	if c.gcpIntrusive && !c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --gcp-intrusive requires --live; GCP recon will stay at the default depth.")
+	}
+	if c.azureIntrusive && c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --azure-intrusive enabled — will map Entra roles and Azure RBAC (redeems the az refresh token, writing an Entra sign-in log).")
+	}
+	if c.azureIntrusive && !c.live && !c.quiet {
+		fmt.Fprintln(stderr, "geiger: --azure-intrusive requires --live; Azure recon will stay at the default depth.")
+	}
+	for _, g := range []struct {
+		on   bool
+		flag string
+	}{
+		{c.oktaIntrusive, "--okta-intrusive"},
+		{c.vaultIntrusive, "--vault-intrusive"},
+		{c.snowIntrusive, "--snowflake-intrusive"},
+		{c.cfIntrusive, "--cloudflare-intrusive"},
+	} {
+		if g.on && !c.live && !c.quiet {
+			fmt.Fprintf(stderr, "geiger: %s requires --live; that service's recon will stay at the default depth.\n", g.flag)
+		}
+	}
+	// --aws-assume performs the deep reads too, so it implies --aws-intrusive.
+	if c.awsAssume != "" {
+		c.awsIntrusive = true
+	}
 
 	opts := pipeline.Options{
 		Live: c.live, Intrusive: c.intrusive, MinFootprint: c.minFootprint,
 		Endpoint: c.endpoint, Proxy: c.proxy, Correlate: c.correlate, Trace: c.trace,
-		SpawnStdio: c.spawnStdio,
-		Timeout:    c.timeout, Concurrency: c.concurrency, StartedAt: time.Now(),
+		SpawnStdio:   c.spawnStdio,
+		AWSIntrusive: c.awsIntrusive, AWSAssume: c.awsAssume,
+		SlackIntrusive:      c.slackIntrusive,
+		GitHubIntrusive:     c.githubIntrusive,
+		GitLabIntrusive:     c.gitlabIntrusive,
+		GCPIntrusive:        c.gcpIntrusive,
+		AzureIntrusive:      c.azureIntrusive,
+		OktaIntrusive:       c.oktaIntrusive,
+		VaultIntrusive:      c.vaultIntrusive,
+		SnowflakeIntrusive:  c.snowIntrusive,
+		CloudflareIntrusive: c.cfIntrusive,
+		Timeout:             c.timeout, Concurrency: c.concurrency, StartedAt: time.Now(),
 		Select: c.selector(),
 	}
 
@@ -269,6 +344,7 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		}
 		fmt.Fprintln(stdout, note.SARIF(notes, ctx, version))
 		printIntrusiveHint(stderr, results, c)
+		printDepthHint(stderr, results, c)
 		return 0
 	}
 	// On an interactive terminal, flip to lowest-impact-first so the CRITICAL/HIGH
@@ -291,6 +367,7 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		printSummary(stdout, results, ctx, c)
 	}
 	printIntrusiveHint(stderr, results, c)
+	printDepthHint(stderr, results, c)
 	return 0
 }
 
@@ -326,6 +403,7 @@ func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipelin
 		printSummary(stdout, all, ctx, c)
 	}
 	printIntrusiveHint(stderr, all, c)
+	printDepthHint(stderr, all, c)
 	return 0
 }
 
@@ -516,6 +594,83 @@ func moduleCategory(mod string) string {
 
 // noteWantsIntrusive reports whether a credential's note says deeper recon needs
 // --intrusive (modules self-declare this in a finding value).
+// serviceDepthFlag maps a module name to the per-service flag that deepens its
+// blast-radius assessment, so a surface-depth run can point the operator at it.
+var serviceDepthFlag = map[string]string{
+	"gitlab":              "--gitlab-intrusive",
+	"slack":               "--slack-intrusive",
+	"github_pat":          "--github-intrusive",
+	"aws":                 "--aws-intrusive",
+	"aws_sso":             "--aws-intrusive",
+	"gcp_service_account": "--gcp-intrusive",
+	"gcp_metadata":        "--gcp-intrusive",
+	"gcp_adc":             "--gcp-intrusive",
+	"azure_msal":          "--azure-intrusive",
+	"entra_sp":            "--azure-intrusive",
+	"okta":                "--okta-intrusive",
+	"vault":               "--vault-intrusive",
+	"snowflake":           "--snowflake-intrusive",
+	"cloudflare":          "--cloudflare-intrusive",
+}
+
+func (c config) depthFlagOn(flag string) bool {
+	switch flag {
+	case "--gitlab-intrusive":
+		return c.gitlabIntrusive
+	case "--slack-intrusive":
+		return c.slackIntrusive
+	case "--github-intrusive":
+		return c.githubIntrusive
+	case "--aws-intrusive":
+		return c.awsIntrusive
+	case "--gcp-intrusive":
+		return c.gcpIntrusive
+	case "--azure-intrusive":
+		return c.azureIntrusive
+	case "--okta-intrusive":
+		return c.oktaIntrusive
+	case "--vault-intrusive":
+		return c.vaultIntrusive
+	case "--snowflake-intrusive":
+		return c.snowIntrusive
+	case "--cloudflare-intrusive":
+		return c.cfIntrusive
+	}
+	return false
+}
+
+// printDepthHint, after a --live run, flags credentials whose deeper per-service
+// assessment (--<service>-intrusive) was available but not enabled. Without it a
+// surface-depth, often low, severity can be mistaken for the full blast radius,
+// so the tail says plainly that the deep assessment did not run.
+func printDepthHint(stderr io.Writer, results []pipeline.Result, c config) {
+	if c.quiet || !c.live || c.minFootprint {
+		return
+	}
+	flags := map[string]bool{}
+	n := 0
+	for _, r := range results {
+		if r.Note.Invalid {
+			continue // dead credential: nothing to deepen
+		}
+		f, ok := serviceDepthFlag[r.Note.Module]
+		if !ok || c.depthFlagOn(f) {
+			continue
+		}
+		flags[f] = true
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	fl := make([]string, 0, len(flags))
+	for k := range flags {
+		fl = append(fl, k)
+	}
+	sort.Strings(fl)
+	fmt.Fprintf(stderr, "\n↳ %d at surface depth; re-run with %s for full reach\n", n, strings.Join(fl, " "))
+}
+
 func noteWantsIntrusive(n gmodule.Note) bool {
 	for _, f := range n.Findings {
 		if strings.Contains(f.Value, "--intrusive") {
@@ -781,6 +936,27 @@ flags:
   --spawn-stdio       also enumerate LOCAL stdio MCP servers, by RUNNING each
                       configured command (needs --live, which on its own asks
                       only remote servers, over http)
+  --aws-intrusive     deep AWS IAM reads: full account authorization graph,
+                      self-grant unroll, role trust graph (needs --live; heavy CloudTrail)
+  --aws-assume SPEC   for an AWS SSO session, mint STS creds and characterize each
+                      target: 'all', ACCOUNT, ACCOUNT/ROLE, or a comma list
+                      (implies --aws-intrusive; needs --live)
+  --slack-intrusive   deeper Slack reach: workspace, users, channels, files the
+                      token can see (needs --live; scopes are reported without it)
+  --github-intrusive  deeper GitHub reach: org members, org/repo Actions secret
+                      names, installation-token repo reach (needs --live)
+  --gitlab-intrusive  deeper GitLab reach: project/group counts, maintainer/owner
+                      reach, CI/CD variable keys (needs --live)
+  --gcp-intrusive     deeper GCP reach: probe effective IAM permissions (privilege
+                      escalation, code execution, data access) across reachable
+                      projects; redeems a gcloud ADC refresh token (needs --live)
+  --azure-intrusive   deeper Azure reach: Entra directory roles and Azure RBAC
+                      across subscriptions; redeems the az refresh token; probes an
+                      Entra service principal's app permissions (needs --live)
+  --okta-intrusive    deeper Okta reach: users, SSO apps, admin-access probe (--live)
+  --vault-intrusive   deeper Vault reach: mounts + path capabilities (needs --live)
+  --snowflake-intrusive  deeper Snowflake reach: role grants + databases (--live)
+  --cloudflare-intrusive deeper Cloudflare reach: zone/account names, Workers/R2 (--live)
   --endpoint URL      tenant/instance/host for set-shaped credentials
   --proxy URL         route HTTP recon through a proxy (http/https/socks5)
   --timeout DUR       per-credential recon timeout (default 15s)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -98,4 +99,92 @@ func indexByKey(fs []module.Finding) map[string]module.Finding {
 		m[f.Key] = f
 	}
 	return m
+}
+
+func githubClientDeep(srv *httptest.Server) *recon.Client {
+	c := githubClient(srv)
+	c.SetGitHubIntrusive(true)
+	return c
+}
+
+func TestGithubIntrusiveOrgAndRepoSecrets(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-OAuth-Scopes", "repo, admin:org")
+		_, _ = w.Write([]byte(`{"login":"ci-bot","type":"User"}`))
+	})
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"full_name":"acme/prod-infra","permissions":{"admin":true,"push":true,"pull":true}}]`))
+	})
+	mux.HandleFunc("/user/memberships/orgs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"role":"admin","organization":{"login":"acme"}}]`))
+	})
+	mux.HandleFunc("/user/orgs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"login":"acme"}]`))
+	})
+	mux.HandleFunc("/orgs/acme/members", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<https://api.github.com/orgs/acme/members?per_page=1&page=42>; rel="last"`)
+		_, _ = w.Write([]byte(`[{"login":"someone"}]`))
+	})
+	mux.HandleFunc("/orgs/acme/actions/secrets", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"total_count":3,"secrets":[{"name":"AWS_KEY"},{"name":"DOCKER_PW"},{"name":"NPM_TOKEN"}]}`))
+	})
+	mux.HandleFunc("/repos/acme/prod-infra/actions/secrets", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"total_count":1,"secrets":[{"name":"DEPLOY_KEY"}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	fs, err := githubPAT{}.Recon(context.Background(), githubClientDeep(srv), module.Token{}, module.Fields{"token": "ghp_classic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := indexByKey(fs)
+	if got["org members"].Value != "acme: 42 members" {
+		t.Errorf("org members = %q", got["org members"].Value)
+	}
+	if got["org ci secrets"].Flag != module.FlagForceMultiplier || !strings.Contains(got["org ci secrets"].Value, "AWS_KEY") {
+		t.Errorf("org ci secrets = %+v", got["org ci secrets"])
+	}
+	if got["repo ci secrets"].Flag != module.FlagForceMultiplier || !strings.Contains(got["repo ci secrets"].Value, "DEPLOY_KEY") {
+		t.Errorf("repo ci secrets = %+v", got["repo ci secrets"])
+	}
+}
+
+func TestGithubIntrusiveGateOff(t *testing.T) {
+	hit := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-OAuth-Scopes", "repo")
+		_, _ = w.Write([]byte(`{"login":"ci-bot","type":"User"}`))
+	})
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"full_name":"acme/x","permissions":{"admin":true,"push":true,"pull":true}}]`))
+	})
+	mux.HandleFunc("/user/memberships/orgs", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`[]`)) })
+	for _, p := range []string{"/user/orgs", "/orgs/acme/actions/secrets", "/repos/acme/x/actions/secrets"} {
+		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) { hit = true; _, _ = w.Write([]byte(`{}`)) })
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, _ = githubPAT{}.Recon(context.Background(), githubClient(srv), module.Token{}, module.Fields{"token": "ghp_classic"})
+	if hit {
+		t.Error("deep GitHub endpoints must not be hit without --github-intrusive")
+	}
+}
+
+func TestGithubInstallationReach(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/installation/repositories", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"total_count":7,"repositories":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	fs, _ := githubPAT{}.Recon(context.Background(), githubClientDeep(srv), module.Token{}, module.Fields{"token": "ghs_install"})
+	got := indexByKey(fs)
+	if got["installation reach"].Flag != module.FlagForceMultiplier || !strings.Contains(got["installation reach"].Value, "7 repositories") {
+		t.Errorf("installation reach = %+v", got["installation reach"])
+	}
 }
