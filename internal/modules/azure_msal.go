@@ -131,20 +131,26 @@ func (m azureMSAL) Recon(ctx context.Context, c *recon.Client, t module.Token, f
 
 	if t.Bearer == "" || !c.Live() {
 		// Mapping live reach would mean redeeming the refresh token — an active
-		// Entra sign-in — so it's gated behind --intrusive.
-		if c.Live() && !c.Intrusive() && f["refresh_token"] != "" {
+		// Entra sign-in — so it's gated behind --intrusive (or --azure-intrusive
+		// for the directory-role and RBAC assessment).
+		if c.Live() && !c.Intrusive() && !c.AzureIntrusive() && f["refresh_token"] != "" {
 			out = append(out, module.Finding{Key: "deepen",
-				Value: "re-run with --intrusive to redeem the refresh token and map Graph/ARM reach (this writes an Entra sign-in log)",
+				Value: "re-run with --intrusive (or --azure-intrusive for Entra roles + Azure RBAC) to redeem the refresh token and map reach (this writes an Entra sign-in log)",
 				Flag:  cantFlag})
 		}
-		return out, nil
+	} else {
+		// Live: who the token is, the tenant, and ARM control-plane reach.
+		out = append(out, m.graphGet(ctx, c, t.Bearer, "/me", "identity", "displayName")...)
+		out = append(out, m.graphGet(ctx, c, t.Bearer, "/organization", "tenant name", "value.0.displayName")...)
+		if n, ok := m.subscriptions(ctx, c, t.Bearer); ok {
+			out = append(out, module.Finding{Key: "azure subscriptions", Value: strconv.Itoa(n) + " (cloud control plane)", Flag: module.FlagWarn})
+		}
 	}
 
-	// Live: who the token is, the tenant, and ARM control-plane reach.
-	out = append(out, m.graphGet(ctx, c, t.Bearer, "/me", "identity", "displayName")...)
-	out = append(out, m.graphGet(ctx, c, t.Bearer, "/organization", "tenant name", "value.0.displayName")...)
-	if n, ok := m.subscriptions(ctx, c, t.Bearer); ok {
-		out = append(out, module.Finding{Key: "azure subscriptions", Value: strconv.Itoa(n) + " (cloud control plane)", Flag: module.FlagWarn})
+	// --azure-intrusive: mint Graph + ARM tokens from the refresh token and map
+	// Entra directory roles and Azure RBAC — what the identity can actually do.
+	if c.AzureIntrusive() && f["refresh_token"] != "" && f["client_id"] != "" {
+		out = append(out, azureImpact(ctx, c, tenantOf(f), f["client_id"], f["refresh_token"])...)
 	}
 	return out, nil
 }

@@ -25,9 +25,26 @@ var privescActions = []struct{ action, why string }{
 	{"sts:AssumeRole", "pivot into other roles"},
 }
 
-// awsPrivesc simulates the curated privesc primitives against the caller and
-// reports which are allowed. PolicySourceArn must be a user or role ARN, so an
-// assumed-role session ARN is normalized to its role ARN first.
+// reachActions is a curated set of high-impact "what can this key do right now"
+// primitives — direct data exfiltration and compute/persistence — distinct from
+// the privesc primitives, which are about gaining more power. If allowed, each
+// turns a valid key into a usable incident without any further escalation.
+var reachActions = []struct{ action, why string }{
+	{"s3:GetObject", "read any S3 object"},
+	{"secretsmanager:GetSecretValue", "read any secret value"},
+	{"ssm:GetParameter", "read SSM parameters (often secrets)"},
+	{"kms:Decrypt", "decrypt KMS-wrapped ciphertext"},
+	{"dynamodb:Scan", "dump DynamoDB tables"},
+	{"ec2:RunInstances", "launch compute (mining / pivot)"},
+	{"lambda:CreateFunction", "run code under a service role"},
+}
+
+// privesc simulates the curated privesc and reach primitives against the caller
+// in a single read-only SimulatePrincipalPolicy call and reports which are
+// allowed. PolicySourceArn must be a user or role ARN, so an assumed-role
+// session ARN is normalized to its role ARN first. Simulation evaluates the
+// principal's effective policy set, so group- and role-inherited permissions
+// are already accounted for in each decision.
 func (m awsKey) privesc(ctx context.Context, c *recon.Client, f module.Fields, callerARN string) []module.Finding {
 	src := roleARNFor(callerARN)
 	if src == "" {
@@ -37,8 +54,14 @@ func (m awsKey) privesc(ctx context.Context, c *recon.Client, f module.Fields, c
 	form.Set("Action", "SimulatePrincipalPolicy")
 	form.Set("Version", "2010-05-08")
 	form.Set("PolicySourceArn", src)
-	for i, a := range privescActions {
-		form.Set("ActionNames.member."+itoaInt(i+1), a.action)
+	i := 0
+	for _, a := range privescActions {
+		i++
+		form.Set("ActionNames.member."+itoaInt(i), a.action)
+	}
+	for _, a := range reachActions {
+		i++
+		form.Set("ActionNames.member."+itoaInt(i), a.action)
 	}
 	body := []byte(form.Encode())
 	req, _ := recon.NewRequest(ctx, http.MethodPost, awsEndpoints.IAM, body)
@@ -46,14 +69,16 @@ func (m awsKey) privesc(ctx context.Context, c *recon.Client, f module.Fields, c
 	if m.sign(ctx, req, f, body, "iam") != nil {
 		return nil
 	}
-	resp, err := c.Do(req, recon.CallOpts{ReadOnlyPOST: true, Note: "iam:SimulatePrincipalPolicy (read-only privesc check)"})
+	resp, err := c.Do(req, recon.CallOpts{ReadOnlyPOST: true, Note: "iam:SimulatePrincipalPolicy (read-only privesc/reach check)"})
 	if err != nil || resp.DryRun || resp.Status >= 300 {
 		return nil
 	}
 	allowed := allowedActions(resp.Body)
 	var out []module.Finding
+	privescHit := false
 	for _, a := range privescActions {
 		if allowed[a.action] {
+			privescHit = true
 			out = append(out, module.Finding{
 				Key:   "privesc",
 				Value: a.action + " — " + a.why,
@@ -61,9 +86,25 @@ func (m awsKey) privesc(ctx context.Context, c *recon.Client, f module.Fields, c
 			})
 		}
 	}
-	if len(out) == 0 && len(allowed) >= 0 {
+	if !privescHit {
 		// simulation ran but found no escalation edge
 		out = append(out, module.Finding{Key: "privesc", Value: "no escalation edge among checked primitives", Flag: module.FlagInfo})
+	}
+	// Group the allowed reach primitives into one force-multiplier finding so the
+	// score reflects "this key can act on data/compute" without each primitive
+	// compounding separately.
+	var caps []string
+	for _, a := range reachActions {
+		if allowed[a.action] {
+			caps = append(caps, a.action)
+		}
+	}
+	if len(caps) > 0 {
+		out = append(out, module.Finding{
+			Key:   "capabilities",
+			Value: "direct reach: " + strings.Join(caps, ", "),
+			Flag:  module.FlagForceMultiplier,
+		})
 	}
 	return out
 }

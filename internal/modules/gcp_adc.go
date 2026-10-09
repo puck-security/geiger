@@ -29,7 +29,7 @@ func (gcpADC) Authenticate(ctx context.Context, c *recon.Client, f module.Fields
 	// rotate the token), so it's gated behind --intrusive; --min-footprint never
 	// refreshes. An ADC file carries no cached access token, so plain --live
 	// characterizes it from the file alone.
-	if c.Intrusive() && !c.MinFootprint() {
+	if (c.Intrusive() || c.GCPIntrusive()) && !c.MinFootprint() {
 		return auth.RefreshToken(ctx, c, gcpEndpoints.Token, f["client_id"], f["client_secret"], f["refresh_token"], url.Values{})
 	}
 	return module.Token{}, nil
@@ -44,9 +44,9 @@ func (gcpADC) Recon(ctx context.Context, c *recon.Client, t module.Token, f modu
 	if t.Bearer == "" {
 		// Live reach needs the refresh token redeemed (an active token grant) —
 		// gated behind --intrusive.
-		if c.Live() && !c.Intrusive() && !c.MinFootprint() {
+		if c.Live() && !c.Intrusive() && !c.GCPIntrusive() && !c.MinFootprint() {
 			out = append(out, module.Finding{Key: "deepen",
-				Value: "re-run with --intrusive to redeem the refresh token and map identity + reachable projects (this performs a token grant)",
+				Value: "re-run with --intrusive (or --gcp-intrusive for the IAM permission assessment) to redeem the refresh token and map identity + reach (this performs a token grant)",
 				Flag:  cantFlag})
 		}
 		return out, nil
@@ -71,6 +71,10 @@ func (gcpADC) Recon(ctx context.Context, c *recon.Client, t module.Token, f modu
 			if projs, ok := jsonDecode(resp.Body)["projects"].([]any); ok {
 				out = append(out, module.Finding{Key: "reachable projects", Value: strconv.Itoa(len(projs)), Flag: module.FlagInfo})
 			}
+		}
+		// --gcp-intrusive: probe effective IAM permissions across reachable projects.
+		if c.GCPIntrusive() {
+			out = append(out, gcpImpact(ctx, c, t.Bearer, gcpProjectIDs(ctx, c, t.Bearer))...)
 		}
 	}
 	return out, nil

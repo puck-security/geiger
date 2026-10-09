@@ -26,8 +26,8 @@ func TestSnowflakeRecon(t *testing.T) {
 	if got["user"].Value != "SVC_USER" || got["role"].Value != "ACCOUNTADMIN" {
 		t.Errorf("snowflake identity wrong: %+v", got)
 	}
-	if got["privilege"].Flag != module.FlagForceMultiplier || got["reach"].Flag != module.FlagForceMultiplier {
-		t.Errorf("ACCOUNTADMIN + reach should be fm: %+v", got)
+	if got["role"].Flag != module.FlagForceMultiplier || got["reach"].Flag != module.FlagForceMultiplier {
+		t.Errorf("ACCOUNTADMIN role + reach should be fm: %+v", got)
 	}
 }
 

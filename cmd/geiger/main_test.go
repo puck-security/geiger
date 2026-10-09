@@ -455,3 +455,37 @@ func TestRedactPlansThenRewritesOnConfirm(t *testing.T) {
 		t.Errorf("rescan of the redacted files should find nothing:\n%s", errOut)
 	}
 }
+
+func TestPrintDepthHint(t *testing.T) {
+	results := []pipeline.Result{
+		{Note: gmodule.Note{Module: "gitlab", Findings: []gmodule.Finding{{Flag: gmodule.FlagInfo}}}},
+		{Note: gmodule.Note{Module: "slack", Findings: []gmodule.Finding{{Flag: gmodule.FlagInfo}}}},
+		{Note: gmodule.Note{Module: "gitlab", Invalid: true}}, // dead: ignored
+		{Note: gmodule.Note{Module: "github_pat", Findings: []gmodule.Finding{{Flag: gmodule.FlagInfo}}}},
+	}
+
+	// --live, no per-service flags: hint names the deeper flags, once each.
+	var b bytes.Buffer
+	printDepthHint(&b, results, config{live: true})
+	got := b.String()
+	for _, want := range []string{"--gitlab-intrusive", "--slack-intrusive", "--github-intrusive", "3 at surface depth"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hint missing %q in:\n%s", want, got)
+		}
+	}
+
+	// Flag already set for a service: that service drops out of the hint.
+	b.Reset()
+	printDepthHint(&b, results, config{live: true, gitlabIntrusive: true, slackIntrusive: true, githubIntrusive: true})
+	if got := b.String(); got != "" {
+		t.Errorf("all deep flags on should silence the hint, got:\n%s", got)
+	}
+
+	// Not live, or min-footprint: no hint.
+	b.Reset()
+	printDepthHint(&b, results, config{live: false})
+	printDepthHint(&b, results, config{live: true, minFootprint: true})
+	if got := b.String(); got != "" {
+		t.Errorf("dry-run / min-footprint should silence the hint, got:\n%s", got)
+	}
+}

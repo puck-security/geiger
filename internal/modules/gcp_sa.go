@@ -99,6 +99,12 @@ func (gcpServiceAccount) Recon(ctx context.Context, c *recon.Client, t module.To
 			}
 		}
 	}
+
+	// --gcp-intrusive: probe effective IAM permissions across reachable projects.
+	if c.GCPIntrusive() {
+		projects := append([]string{f["project_id"]}, gcpProjectIDs(ctx, c, t.Bearer)...)
+		out = append(out, gcpImpact(ctx, c, t.Bearer, projects)...)
+	}
 	return out, nil
 }
 

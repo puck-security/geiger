@@ -30,13 +30,42 @@ type Options struct {
 	// SpawnStdio permits EXECUTING locally-configured stdio MCP servers to
 	// enumerate their tools. Separate from Intrusive because it runs an argv
 	// read out of a scanned file, which no other geiger operation does.
-	SpawnStdio  bool
-	Trace       bool // capture masked request/response bodies
-	Endpoint    string
-	Proxy       string // SOCKS5/HTTP proxy URL for HTTP recon egress
-	Timeout     time.Duration
-	Concurrency int       // max credentials reconned at once on the live path (0 = default)
-	StartedAt   time.Time // run start, stamped on live-validated findings (zero = now)
+	SpawnStdio bool
+	// AWSIntrusive permits deep, call-heavy AWS IAM reads (account graph,
+	// self-grant unroll, role trust graph). Separate from Intrusive because it
+	// generates substantial CloudTrail across the account.
+	AWSIntrusive bool
+	// AWSAssume targets credential-minting from an SSO session: "all",
+	// "ACCOUNT", "ACCOUNT/ROLE", or a comma-separated list. "" = never mint.
+	AWSAssume string
+	// SlackIntrusive permits the deeper Slack reach enumeration (workspace,
+	// users, channels, files). Scope-derived capabilities stay in default --live.
+	SlackIntrusive bool
+	// GitHubIntrusive permits the deeper GitHub reach enumeration (org members,
+	// org/repo Actions secret names, installation-token repo reach).
+	GitHubIntrusive bool
+	// GitLabIntrusive permits the deeper GitLab reach enumeration (project/group
+	// counts, maintainer/owner reach, CI/CD variable keys).
+	GitLabIntrusive bool
+	// GCPIntrusive permits the deep GCP IAM assessment (testIamPermissions across
+	// reachable projects) and, for gcloud ADC, the refresh-token redemption.
+	GCPIntrusive bool
+	// AzureIntrusive permits the deep Azure assessment (Entra directory roles and
+	// Azure RBAC) and the refresh-token redemption needed to mint Graph/ARM tokens.
+	// It also gates the Entra service-principal (entra_sp) app-permission probe.
+	AzureIntrusive bool
+	// OktaIntrusive, VaultIntrusive, SnowflakeIntrusive, CloudflareIntrusive gate
+	// the deeper per-service reach assessments for those services.
+	OktaIntrusive       bool
+	VaultIntrusive      bool
+	SnowflakeIntrusive  bool
+	CloudflareIntrusive bool
+	Trace               bool // capture masked request/response bodies
+	Endpoint            string
+	Proxy               string // SOCKS5/HTTP proxy URL for HTTP recon egress
+	Timeout             time.Duration
+	Concurrency         int       // max credentials reconned at once on the live path (0 = default)
+	StartedAt           time.Time // run start, stamped on live-validated findings (zero = now)
 	// Select, when set, scopes the run: only recognized credentials whose module
 	// name passes are reconned (the rest are skipped entirely, not just hidden).
 	// Backs --only/--skip so a second, deeper pass needn't re-exercise everything.
@@ -522,6 +551,17 @@ func runOne(b parse.Blob, reg *module.Registry, opts Options, m recognize.Match)
 	client.SetMinFootprint(opts.MinFootprint)
 	client.SetCorrelate(opts.Correlate)
 	client.SetSpawnStdio(opts.SpawnStdio)
+	client.SetAWSIntrusive(opts.AWSIntrusive)
+	client.SetAWSAssume(opts.AWSAssume)
+	client.SetSlackIntrusive(opts.SlackIntrusive)
+	client.SetGitHubIntrusive(opts.GitHubIntrusive)
+	client.SetGitLabIntrusive(opts.GitLabIntrusive)
+	client.SetGCPIntrusive(opts.GCPIntrusive)
+	client.SetAzureIntrusive(opts.AzureIntrusive)
+	client.SetOktaIntrusive(opts.OktaIntrusive)
+	client.SetVaultIntrusive(opts.VaultIntrusive)
+	client.SetSnowflakeIntrusive(opts.SnowflakeIntrusive)
+	client.SetCloudflareIntrusive(opts.CloudflareIntrusive)
 	client.SetTrace(opts.Trace)
 	// Seed the scrubber with secret values so none can leak into a recorded URL
 	// or header (e.g. a token carried in the URL path). Skip clearly non-secret

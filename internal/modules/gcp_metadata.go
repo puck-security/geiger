@@ -43,6 +43,10 @@ func (gcpMetadata) Recon(ctx context.Context, c *recon.Client, _ module.Token, f
 		if n, ok := gcpTokenProjects(ctx, c, bearer); ok {
 			out = append(out, module.Finding{Key: "reachable projects", Value: strconv.Itoa(n), Flag: module.FlagInfo})
 		}
+		// --gcp-intrusive: probe effective IAM permissions across reachable projects.
+		if c.GCPIntrusive() {
+			out = append(out, gcpImpact(ctx, c, bearer, gcpProjectIDs(ctx, c, bearer))...)
+		}
 	}
 	return out, nil
 }
