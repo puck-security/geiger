@@ -146,6 +146,10 @@ type jsonNote struct {
 	Undetermined bool   `json:"undetermined,omitempty"`
 	Reason       string `json:"reason,omitempty"`
 	Summary      string `json:"summary,omitempty"`
+	// File and Line are the source location, carried structurally so the full
+	// (untruncated) path is retrievable even when a long path is cut from Title.
+	File string `json:"file,omitempty"`
+	Line int    `json:"line,omitempty"`
 	// Fingerprint is the upstream scanner's id, passed through so their tooling
 	// can dedupe geiger's output against their own findings.
 	Fingerprint string        `json:"fingerprint,omitempty"`
@@ -178,7 +182,7 @@ func flagName(fl module.FlagLevel) string {
 // computed here (from the same score.Context the text renderer uses) so the
 // machine shape is self-contained and downstream consumers don't re-derive them.
 func JSON(n module.Note, ctx score.Context) string {
-	jn := jsonNote{Title: sanitize(n.Title), Tier: string(score.TierFor(n, ctx)), Score: score.BlastRadius(n, ctx), Invalid: n.Invalid, Undetermined: n.Undetermined, Reason: sanitize(n.Reason), Summary: sanitize(n.Summary), Fingerprint: sanitize(n.Fingerprint), Findings: []jsonFinding{}}
+	jn := jsonNote{Title: sanitize(n.Title), Tier: string(score.TierFor(n, ctx)), Score: score.BlastRadius(n, ctx), Invalid: n.Invalid, Undetermined: n.Undetermined, Reason: sanitize(n.Reason), Summary: sanitize(n.Summary), File: sanitize(n.File), Line: n.Line, Fingerprint: sanitize(n.Fingerprint), Findings: []jsonFinding{}}
 	for _, f := range n.Findings {
 		var detail []string
 		for _, d := range f.Detail {
