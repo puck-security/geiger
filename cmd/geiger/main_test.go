@@ -251,6 +251,32 @@ func TestMinSeverityShowResult(t *testing.T) {
 	}
 }
 
+func TestGenericSecretHiddenUnlessVerbose(t *testing.T) {
+	ctx := score.Context{}
+	genInfo := pipeline.Result{Note: gmodule.Note{Module: "generic_secret", Findings: []gmodule.Finding{{Flag: gmodule.FlagInfo}}}}
+	genHigh := pipeline.Result{Note: gmodule.Note{Module: "generic_secret", Findings: []gmodule.Finding{{Flag: gmodule.FlagForceMultiplier}}}}
+	realInfo := pipeline.Result{Note: gmodule.Note{Module: "slack", Findings: []gmodule.Finding{{Flag: gmodule.FlagInfo}}}}
+
+	if (config{}).showResult(genInfo, ctx) {
+		t.Error("generic_secret at INFO must be hidden by default")
+	}
+	if !(config{verbose: true}).showResult(genInfo, ctx) {
+		t.Error("-v must show generic_secret at INFO")
+	}
+	if !(config{asJSON: true}).showResult(genInfo, ctx) {
+		t.Error("machine output (--json) must keep generic_secret at INFO")
+	}
+	if !(config{}).showResult(realInfo, ctx) {
+		t.Error("a recognized module at INFO must still show by default")
+	}
+	if !(config{}).showResult(genHigh, ctx) {
+		t.Error("a generic_secret raised above INFO must still show")
+	}
+	if !(config{}).anyHiddenGeneric([]pipeline.Result{realInfo, genInfo}, ctx) {
+		t.Error("anyHiddenGeneric should report the hidden generic_secret")
+	}
+}
+
 func TestShouldReverse(t *testing.T) {
 	cases := []struct {
 		noReverse, asJSON bool
