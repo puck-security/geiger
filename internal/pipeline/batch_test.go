@@ -326,36 +326,34 @@ func TestWalkDirSkipsNoiseDirs(t *testing.T) {
 	}
 }
 
-func TestWalkDirSkipsWindowsNoiseButNotSysvol(t *testing.T) {
+// Windows system trees are prime hunting ground, not noise: $Recycle.Bin holds
+// deleted configs, Windows.old is a whole previous install with every user
+// profile, and SYSVOL holds GPP cpassword and logon scripts. The walk must still
+// descend into them — only true dependency/build noise (node_modules, etc.) is
+// skipped. This guards against re-adding an OS-dir skip.
+func TestWalkDirWalksWindowsSystemTrees(t *testing.T) {
 	dir := t.TempDir()
-	// Pure-noise Windows trees: must be skipped.
-	for _, d := range []string{"WinSxS", "$Recycle.Bin", "System Volume Information", "DriverStore"} {
-		p := filepath.Join(dir, d)
-		os.MkdirAll(p, 0o755)
-		os.WriteFile(filepath.Join(p, "junk.xml"), []byte(`<x cpassword="AAAA"/>`), 0o600)
+	want := map[string]bool{}
+	for i, rel := range []string{
+		filepath.Join("$Recycle.Bin", "S-1-5-21", "deleted.env"),
+		filepath.Join("Windows.old", "Users", "admin", ".aws", "credentials"),
+		filepath.Join("WinSxS", "manifests", "config.xml"),
+		filepath.Join("SYSVOL", "acme.local", "Policies", "Groups.xml"),
+	} {
+		p := filepath.Join(dir, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(fmt.Sprintf("TOKEN=v%d", i)), 0o600)
+		want[p] = true
 	}
-	// SYSVOL holds GPP cpassword and logon scripts — it must still be walked.
-	sysvol := filepath.Join(dir, "SYSVOL", "acme.local", "Policies")
-	os.MkdirAll(sysvol, 0o755)
-	os.WriteFile(filepath.Join(sysvol, "Groups.xml"), []byte(`<x cpassword="BBBB"/>`), 0o600)
-
 	srcs, _, err := WalkDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundSysvol := false
 	for _, s := range srcs {
-		for _, noise := range []string{"WinSxS", "$Recycle.Bin", "System Volume Information", "DriverStore"} {
-			if strings.Contains(s.Label, noise) {
-				t.Errorf("%s should be skipped: %s", noise, s.Label)
-			}
-		}
-		if filepath.Base(s.Label) == "Groups.xml" {
-			foundSysvol = true
-		}
+		delete(want, s.Label)
 	}
-	if !foundSysvol {
-		t.Error("SYSVOL content must still be walked")
+	for p := range want {
+		t.Errorf("not walked, but should be: %s", p)
 	}
 }
 

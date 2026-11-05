@@ -348,12 +348,6 @@ func skipDir(name string) bool {
 	case ".terraform", "dist", "build", "out", "coverage", "__snapshots__",
 		"Pods", "DerivedData":
 		return true
-	// Windows OS noise: huge, hard-linked, or recycled trees that hold no
-	// leaked credentials. SYSVOL and the rest of C:\Windows are NOT skipped —
-	// GPP cpassword and logon scripts live there — only these pure-noise dirs.
-	case "WinSxS", "DriverStore", "Windows.old", "$Recycle.Bin",
-		"System Volume Information", "$WinREAgent":
-		return true
 	}
 	// Python package metadata dirs: foo-1.2.dist-info / foo.egg-info
 	if strings.HasSuffix(name, ".dist-info") || strings.HasSuffix(name, ".egg-info") {
