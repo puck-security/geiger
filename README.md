@@ -677,6 +677,10 @@ A block per credential: a tier, a redacted title with the source location, never
 the raw secret, labeled findings (`⚠` notable, `⚠⚠` force multiplier, `?`
 can't-determine-read-only), and a one-line takeaway.
 
+A `generic_secret` is an unrecognized name/shape match: high volume, low signal.
+At INFO it is hidden from the default output and counted in the summary; `-v`
+shows it, and `--json` / `--sarif` always keep it.
+
 **For IR**, each finding leads with *where* and *when*: an `exposure` line
 classifies the source — a **crash dump** (in-memory, persisted to disk, often
 auto-uploaded — may have left the host), a VS Code **local-history snapshot**, an

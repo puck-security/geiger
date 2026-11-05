@@ -308,9 +308,34 @@ func run(stdout, stderr io.Writer, statusOn bool, c config) int {
 // summary, color, and the interactive lowest-first reordering.
 func (c config) machine() bool { return c.asJSON || c.sarif }
 
-// showResult reports whether a result clears the --min-severity threshold.
+// showResult reports whether a result prints in the default human output: it
+// must clear the --min-severity threshold and not be a hidden generic_secret.
 func (c config) showResult(r pipeline.Result, ctx score.Context) bool {
-	return score.Rank(score.TierFor(r.Note, ctx)) >= c.minSevRank
+	if score.Rank(score.TierFor(r.Note, ctx)) < c.minSevRank {
+		return false
+	}
+	return !c.hiddenGeneric(r, ctx)
+}
+
+// hiddenGeneric reports whether r is a generic_secret match suppressed from the
+// default human output. A generic_secret is an unrecognized name/shape match:
+// high volume, low signal. At INFO (nothing raised its tier) it is hidden unless
+// -v is set. Machine output (--json/--sarif) always keeps it.
+func (c config) hiddenGeneric(r pipeline.Result, ctx score.Context) bool {
+	return !c.verbose && !c.machine() &&
+		r.Note.Module == "generic_secret" &&
+		score.TierFor(r.Note, ctx) == score.TierInfo
+}
+
+// anyHiddenGeneric reports whether any result is a hidden generic_secret, so the
+// summary still prints (with its count) when hiding leaves nothing else to show.
+func (c config) anyHiddenGeneric(results []pipeline.Result, ctx score.Context) bool {
+	for _, r := range results {
+		if score.Rank(score.TierFor(r.Note, ctx)) >= c.minSevRank && c.hiddenGeneric(r, ctx) {
+			return true
+		}
+	}
+	return false
 }
 
 // runSorted is the default: triage every source, then sort by blast radius so
@@ -363,7 +388,7 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 		printResult(stdout, r, ctx, c, printed > 0)
 		printed++
 	}
-	if !c.machine() && (len(results) > 1 || c.minSevRank > 0) {
+	if !c.machine() && (len(results) > 1 || c.minSevRank > 0 || c.anyHiddenGeneric(results, ctx)) {
 		printSummary(stdout, results, ctx, c)
 	}
 	printIntrusiveHint(stderr, results, c)
@@ -399,7 +424,7 @@ func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipelin
 		}
 		return 0
 	}
-	if !c.machine() && (len(all) > 1 || c.minSevRank > 0) {
+	if !c.machine() && (len(all) > 1 || c.minSevRank > 0 || c.anyHiddenGeneric(all, ctx)) {
 		printSummary(stdout, all, ctx, c)
 	}
 	printIntrusiveHint(stderr, all, c)
@@ -724,12 +749,14 @@ func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c c
 	var tiers []string
 	counts := map[score.Tier]int{}
 	var rotateFirst, investigate []string
-	var secretsStore, cantChar, dead, hidden, browserCount int
+	var secretsStore, cantChar, dead, hidden, genericHidden, browserCount int
 	for _, r := range results {
 		tier := score.TierFor(r.Note, ctx)
 		counts[tier]++
 		if score.Rank(tier) < c.minSevRank {
 			hidden++
+		} else if c.hiddenGeneric(r, ctx) {
+			genericHidden++
 		}
 		// Browser notes are capability/blast-radius findings, not credentials —
 		// the action is investigate/remove, not rotate.
@@ -779,6 +806,9 @@ func printSummary(w io.Writer, results []pipeline.Result, ctx score.Context, c c
 	fmt.Fprintf(w, "── summary ── %d %s: %s\n", len(results), noun, strings.Join(tiers, "  "))
 	if hidden > 0 {
 		fmt.Fprintf(w, "  %d below %s hidden (--min-severity)\n", hidden, strings.ToLower(c.minSeverity))
+	}
+	if genericHidden > 0 {
+		fmt.Fprintf(w, "  %d generic_secret hidden (-v to show)\n", genericHidden)
 	}
 	if len(rotateFirst) > 0 {
 		fmt.Fprintf(w, "  rotate first: %s\n", strings.Join(rotateFirst, ", "))
