@@ -12,7 +12,7 @@ geiger --dangerous-redact --confirm-redact --git-history \
 git filter-repo --replace-text /tmp/repl.txt           # then scrub the history
 ```
 
-## The plan
+## What the plan shows
 
 The plan lists each file, and under it each value: the line it sits on, the module
 that recognized it, the variable or JSON path it came from, a masked tail to match

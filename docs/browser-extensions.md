@@ -11,22 +11,23 @@ geiger --browser --all              # full inventory (incl. narrow/benign)
 geiger --browser --json             # IOCs (extension id, hosts) for a SIEM
 ```
 
-## What it scores
+## How geiger scores an extension
 
-geiger scores each installed extension's permission union. `cookies` + broad host
-access + request interception, script injection, or proxy means the extension can
-read every site's session cookies and pivot through the browser. It flags
-sideloaded or unpacked extensions, which are unsigned and not content-verified.
+geiger scores the full set of permissions each installed extension holds.
+`cookies` plus broad host access plus request interception, script injection, or
+proxy means the extension can read every site's session cookies and pivot through
+the browser. It flags sideloaded or unpacked extensions, which are unsigned and
+not content-verified.
 
-With `--live --intrusive` it also inventories the live sessions such an extension
-would reach, from the Cookies store metadata (domains only — the values are
-keychain-encrypted), ranked by blast radius with IdP/SSO sessions first.
+With `--live --intrusive` it also lists the live sessions such an extension would
+reach, from the Cookies store metadata (domains only — the values are
+keychain-encrypted), ranked by blast radius with IdP and SSO sessions first.
 
-## Responder triage bundle
+## What geiger collects for a flagged extension
 
-An unsigned all-sites extension is capability-identical to a real CursedChrome, so
-geiger does not guess intent. For each flagged sideloaded extension it builds a
-triage bundle:
+An unsigned all-sites extension has the same capabilities as a real CursedChrome,
+so geiger does not guess intent. For each flagged sideloaded extension it collects
+a triage bundle:
 
 - install age
 - UI surface

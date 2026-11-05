@@ -165,7 +165,7 @@ geiger --ssh-correlate ~/.ssh   # + guess other target hosts from local hints
 **Browser extensions** — `--browser` models the impact of a malicious
 Chromium-family extension (Chrome, Edge, Brave, Chromium, Vivaldi): a
 CursedChrome-style proxy, an infostealer, or a sideloaded MV3 extension. It scores
-each extension's permission union, flags sideloaded ones, and builds a responder
+the permissions each extension holds, flags sideloaded ones, and builds a responder
 triage bundle. With `--live --intrusive` it also inventories the live sessions the
 extension would reach, from the Cookies store metadata (domains only). See
 [docs/browser-extensions.md](docs/browser-extensions.md).
@@ -178,11 +178,11 @@ geiger --browser --json             # IOCs (extension id, hosts) for a SIEM
 ```
 
 **Agentic reach** — point geiger at an agent config, a repo, or a home directory
-and it maps what the agent's tool chain reaches, not only the secrets in the file.
-This runs by default when a config turns up in the walk. geiger types each MCP
-server into reach primitives, then sets the tier from the compositions: reach that
+and it maps what the agent's tools can reach, not only the secrets in the file.
+This runs by default when a config turns up in the walk. geiger labels what each
+tool can do, then sets the severity from the dangerous combinations — reach that
 exists only because the tools share one context window (the lethal trifecta,
-bulk-read plus egress, exec on the host). See
+bulk read plus a way out, exec on the host). See
 [docs/agentic-reach.md](docs/agentic-reach.md).
 
 ```sh
@@ -622,7 +622,7 @@ fields. `--trace` shows the raw request/response (secrets masked).
 Pipeline: recognize → (authenticate) → recon → note. geiger makes no write calls,
 and runs dry by default. `--live` is required to make calls, and it always prints
 the destinations it hits. See [docs/internals.md](docs/internals.md) for the full
-safety model, endpoint provenance, and the scope of the impact analysis.
+safety model, endpoint provenance, and what the analysis does not do.
 
 **Authorized use only.** geiger exercises live credentials. Run it only on
 credentials you are entitled to triage.

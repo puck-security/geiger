@@ -1,7 +1,8 @@
 # How geiger works
 
 **Pipeline:** recognize → (authenticate) → recon → note. Recon runs the
-identity/whoami call first, then a couple of count calls to size reach.
+identity/whoami call first, then a couple of count calls to gauge how much the
+credential reaches.
 
 ## Safety model
 
@@ -31,10 +32,11 @@ the file, and a violation degrades to "needs endpoint" instead of dialing.
 Self-hosted services can live at any domain, so those are not pinned; their
 destination is flagged in the note instead.
 
-## Scope of impact analysis
+## What geiger does not do
 
-geiger reports likely impact, not perfect impact. It is triage, not deep
-cloud-privesc graphing. Use PMapper, CloudFox, or ScoutSuite for that.
+geiger reports likely impact, not exact impact. It triages a credential; it does
+not build a full cloud privilege-escalation graph. Use PMapper, CloudFox, or
+ScoutSuite for that.
 
 ## Authorized use only
 
