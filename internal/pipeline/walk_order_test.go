@@ -24,7 +24,7 @@ func TestWalkDirOrderIsStableAcrossRuns(t *testing.T) {
 		}
 	}
 
-	first, err := WalkDir(dir, nil)
+	first, _, err := WalkDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestWalkDirOrderIsStableAcrossRuns(t *testing.T) {
 	}
 	want := labels(first)
 	for run := range 12 {
-		got, err := WalkDir(dir, nil)
+		got, _, err := WalkDir(dir, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func TestWalkDirPairsEachLabelWithItsOwnContent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := WalkDir(dir, nil)
+	got, _, err := WalkDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestWalkDirProgressIsSerializedAndMonotonic(t *testing.T) {
 		}
 	}
 	var counts []int
-	got, err := WalkDir(dir, func(n int) { counts = append(counts, n) }) // unsynchronized on purpose: -race proves the callback is serialized
+	got, _, err := WalkDir(dir, nil, func(n int) { counts = append(counts, n) }) // unsynchronized on purpose: -race proves the callback is serialized
 	if err != nil {
 		t.Fatal(err)
 	}

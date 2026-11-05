@@ -1050,6 +1050,9 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 		// second pass can target just the few files that mattered.
 		var all []pipeline.Source
 		scanned := 0
+		// One budget for the whole run: scanning several paths at once cannot, in
+		// total, read more than the ceiling into memory.
+		budget := pipeline.NewWalkBudget()
 		for _, path := range c.args {
 			info, err := os.Stat(path)
 			if err != nil {
@@ -1058,13 +1061,17 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 			switch {
 			case info.IsDir():
 				base := scanned
-				srcs, err := pipeline.WalkDir(path, func(n int) {
+				srcs, wstats, err := pipeline.WalkDir(path, budget, func(n int) {
 					if (base+n)%64 == 0 {
 						st.update("scanning %s — %d files", path, base+n)
 					}
 				})
 				if err != nil {
 					return nil, err
+				}
+				if wstats.Truncated && !c.quiet {
+					st.clear()
+					fmt.Fprintf(st.w, "geiger: reached the scan limit (%s); triaged %d files from %s, not the whole tree. Narrow the path for full coverage.\n", wstats.Reason, wstats.Files, path)
 				}
 				scanned += len(srcs)
 				all = append(all, srcs...)

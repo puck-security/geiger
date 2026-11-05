@@ -320,6 +320,12 @@ round-trip, so it scales with `--concurrency` and rate limits, not corpus size.
 `--intrusive` is slower due to DB handshakes, secret-manager fan-out,
 recursive triage.
 
+A run is bounded so geiger cannot exhaust memory on a huge tree (a whole drive, a
+network share): across all the paths you give it, it stops after 100k files or
+256 MB of content and warns that coverage was partial. It skips pure-noise OS
+trees (`node_modules`, `WinSxS`, `$Recycle.Bin`, and the like). Point geiger at a
+narrower path, such as SYSVOL rather than all of `C:\Windows`, for full coverage.
+
 ---
 
 ## Reference

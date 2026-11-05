@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -20,10 +21,46 @@ import (
 
 const maxFileSize = 8 << 20 // 8 MB
 
+// Resource ceilings for a run. A walk reads every matching file into memory
+// before triage, so an unbounded tree — a whole Windows drive, a network share —
+// would exhaust RAM and take the host down. These cap the work: a run stops
+// after maxWalkFiles files or maxWalkBytes of content, whichever comes first,
+// and the caller is told the coverage was partial. Normal IR inputs (a repo, a
+// home directory, a compromised-host tarball) are far below both.
+const (
+	maxWalkFiles = 100_000   // file-count ceiling for a run
+	maxWalkBytes = 256 << 20 // cumulative bytes of file content held in a run
+)
+
 // Source is one parsed input plus where it came from (for batch reporting).
 type Source struct {
 	Label string
 	Blob  parse.Blob
+}
+
+// WalkBudget is the shared file and byte allowance for one run. A single budget
+// is threaded through every WalkDir call so that scanning several paths at once
+// cannot, in total, read more than the ceiling into memory — the limit is global
+// to the run, not per path. The zero value is not usable; call NewWalkBudget.
+type WalkBudget struct {
+	files atomic.Int64 // remaining files the run may still load
+	bytes atomic.Int64 // remaining content bytes the run may still hold
+}
+
+// NewWalkBudget returns a budget seeded with the default ceilings.
+func NewWalkBudget() *WalkBudget {
+	b := &WalkBudget{}
+	b.files.Store(maxWalkFiles)
+	b.bytes.Store(maxWalkBytes)
+	return b
+}
+
+// WalkStats reports how far a walk got and whether the run's budget cut it
+// short, so the caller can warn that the scan covered only part of the tree.
+type WalkStats struct {
+	Files     int    // files loaded into Sources by this walk
+	Truncated bool   // the budget stopped this walk early
+	Reason    string // which ceiling, for the warning
 }
 
 // WalkDir returns a Source per regular file under dir, skipping the obvious
@@ -32,8 +69,16 @@ type Source struct {
 // vendored dependency tree or a lockfile full of hashes is pure false-positive
 // fuel, so we don't descend into it. onFile, if non-nil, is called with the
 // running count of accepted files after each is added, for progress reporting.
-func WalkDir(dir string, onFile func(scanned int)) ([]Source, error) {
+//
+// budget is the run-wide allowance (see WalkBudget); pass nil for an unshared
+// default-sized budget. The walk never tries to hold an arbitrarily large tree
+// in memory. WalkStats says whether the budget was hit.
+func WalkDir(dir string, budget *WalkBudget, onFile func(scanned int)) ([]Source, WalkStats, error) {
+	if budget == nil {
+		budget = NewWalkBudget()
+	}
 	var paths []string
+	var stats WalkStats
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
@@ -50,11 +95,22 @@ func WalkDir(dir string, onFile func(scanned int)) ([]Source, error) {
 			return nil
 		}
 		if !skipFile(d.Name()) {
+			if budget.files.Add(-1) < 0 {
+				stats.Truncated = true
+				stats.Reason = fmt.Sprintf("hit the %d-file limit", maxWalkFiles)
+				return filepath.SkipAll
+			}
 			paths = append(paths, path)
 		}
 		return nil
 	})
-	return loadSources(paths, onFile), err
+	srcs, overByte := loadSources(paths, budget, onFile)
+	stats.Files = len(srcs)
+	if overByte {
+		stats.Truncated = true
+		stats.Reason = fmt.Sprintf("hit the %d MB content limit", maxWalkBytes>>20)
+	}
+	return srcs, stats, err
 }
 
 // loadConcurrency is the worker count for reading and parsing files. The work is
@@ -79,7 +135,11 @@ func loadConcurrency(n int) int {
 
 const maxLoadWorkers = 16
 
-// loadSources reads and parses every candidate path through a worker pool.
+// loadSources reads and parses every candidate path through a worker pool,
+// spending the run's byte budget as it reads. Once the budget is spent, the
+// remaining files are not read and the second return value is true, so the
+// caller can report partial coverage. The budget is what stops a huge tree from
+// exhausting memory.
 //
 // Results keep walk order: each worker writes its own slot and the slice is
 // compacted afterwards. That ordering is load-bearing, not cosmetic — the batch
@@ -91,14 +151,15 @@ const maxLoadWorkers = 16
 // invoked from worker goroutines but serialized, so a caller may write progress
 // output from it. The count is a completion tally, so it no longer implies
 // anything about which file is being read.
-func loadSources(paths []string, onFile func(int)) []Source {
+func loadSources(paths []string, budget *WalkBudget, onFile func(int)) ([]Source, bool) {
 	if len(paths) == 0 {
-		return nil
+		return nil, false
 	}
 	slots := make([][]Source, len(paths))
 	var (
-		mu     sync.Mutex
-		loaded int
+		mu        sync.Mutex
+		loaded    int
+		budgetHit atomic.Bool
 	)
 	tick := func(n int) {
 		if onFile == nil || n == 0 {
@@ -110,7 +171,21 @@ func loadSources(paths []string, onFile func(int)) []Source {
 		onFile(loaded)
 	}
 	load := func(i int) {
+		// Stop reading new files once the run's budget is spent. Files already in
+		// flight finish, so the overage is bounded by the worker count, not the
+		// tree size. The budget is shared, so an earlier path may have spent it.
+		if budget.bytes.Load() <= 0 {
+			budgetHit.Store(true)
+			return
+		}
 		s := loadFile(paths[i])
+		var n int64
+		for _, src := range s {
+			n += int64(len(src.Blob.Raw))
+		}
+		if budget.bytes.Add(-n) < 0 {
+			budgetHit.Store(true)
+		}
 		slots[i] = s
 		tick(len(s))
 	}
@@ -140,7 +215,7 @@ func loadSources(paths []string, onFile func(int)) []Source {
 	for _, s := range slots {
 		out = append(out, s...)
 	}
-	return out
+	return out, budgetHit.Load()
 }
 
 // loadFile reads and parses one regular file. It returns nil when the file
@@ -272,6 +347,12 @@ func skipDir(name string) bool {
 	// IaC / build artifacts
 	case ".terraform", "dist", "build", "out", "coverage", "__snapshots__",
 		"Pods", "DerivedData":
+		return true
+	// Windows OS noise: huge, hard-linked, or recycled trees that hold no
+	// leaked credentials. SYSVOL and the rest of C:\Windows are NOT skipped —
+	// GPP cpassword and logon scripts live there — only these pure-noise dirs.
+	case "WinSxS", "DriverStore", "Windows.old", "$Recycle.Bin",
+		"System Volume Information", "$WinREAgent":
 		return true
 	}
 	// Python package metadata dirs: foo-1.2.dist-info / foo.egg-info

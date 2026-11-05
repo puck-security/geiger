@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,7 +306,7 @@ func TestWalkDirSkipsNoiseDirs(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755)
 	os.WriteFile(filepath.Join(dir, "node_modules", "junk.js"), []byte("x"), 0o600)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=B"), 0o600)
-	srcs, err := WalkDir(dir, nil)
+	srcs, _, err := WalkDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +326,91 @@ func TestWalkDirSkipsNoiseDirs(t *testing.T) {
 	}
 }
 
+func TestWalkDirSkipsWindowsNoiseButNotSysvol(t *testing.T) {
+	dir := t.TempDir()
+	// Pure-noise Windows trees: must be skipped.
+	for _, d := range []string{"WinSxS", "$Recycle.Bin", "System Volume Information", "DriverStore"} {
+		p := filepath.Join(dir, d)
+		os.MkdirAll(p, 0o755)
+		os.WriteFile(filepath.Join(p, "junk.xml"), []byte(`<x cpassword="AAAA"/>`), 0o600)
+	}
+	// SYSVOL holds GPP cpassword and logon scripts — it must still be walked.
+	sysvol := filepath.Join(dir, "SYSVOL", "acme.local", "Policies")
+	os.MkdirAll(sysvol, 0o755)
+	os.WriteFile(filepath.Join(sysvol, "Groups.xml"), []byte(`<x cpassword="BBBB"/>`), 0o600)
+
+	srcs, _, err := WalkDir(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundSysvol := false
+	for _, s := range srcs {
+		for _, noise := range []string{"WinSxS", "$Recycle.Bin", "System Volume Information", "DriverStore"} {
+			if strings.Contains(s.Label, noise) {
+				t.Errorf("%s should be skipped: %s", noise, s.Label)
+			}
+		}
+		if filepath.Base(s.Label) == "Groups.xml" {
+			foundSysvol = true
+		}
+	}
+	if !foundSysvol {
+		t.Error("SYSVOL content must still be walked")
+	}
+}
+
+func TestLoadSourcesByteBudgetStopsAndReports(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := range 8 {
+		p := filepath.Join(dir, fmt.Sprintf("f%d.env", i))
+		os.WriteFile(p, []byte("TOKEN="+strings.Repeat("a", 4096)), 0o600)
+		paths = append(paths, p)
+	}
+	// Budget below the total content: the walk must report truncation.
+	small := &WalkBudget{}
+	small.files.Store(1 << 30)
+	small.bytes.Store(1024)
+	if _, over := loadSources(paths, small, nil); !over {
+		t.Error("a byte budget smaller than the content should report truncation")
+	}
+	// Budget above the total: everything loads, no truncation.
+	big := &WalkBudget{}
+	big.files.Store(1 << 30)
+	big.bytes.Store(1 << 20)
+	out, over := loadSources(paths, big, nil)
+	if over {
+		t.Error("a budget above the content must not report truncation")
+	}
+	if len(out) != len(paths) {
+		t.Errorf("loaded %d sources, want %d", len(out), len(paths))
+	}
+}
+
+func TestWalkBudgetIsGlobalAcrossWalks(t *testing.T) {
+	// Two separate dirs, one shared budget big enough for only the first.
+	mk := func(n int) string {
+		d := t.TempDir()
+		for i := range n {
+			os.WriteFile(filepath.Join(d, fmt.Sprintf("f%d.env", i)), []byte("TOKEN=abc"), 0o600)
+		}
+		return d
+	}
+	d1, d2 := mk(3), mk(3)
+	budget := &WalkBudget{}
+	budget.files.Store(3) // room for the first walk only
+	budget.bytes.Store(1 << 30)
+
+	s1, w1, _ := WalkDir(d1, budget, nil)
+	if w1.Truncated || len(s1) != 3 {
+		t.Fatalf("first walk should fit: truncated=%v files=%d", w1.Truncated, len(s1))
+	}
+	s2, w2, _ := WalkDir(d2, budget, nil)
+	if !w2.Truncated || len(s2) != 0 {
+		t.Errorf("second walk should be starved by the shared budget: truncated=%v files=%d", w2.Truncated, len(s2))
+	}
+}
+
 func TestWalkDirSkipsDependencyTreesAndLockfiles(t *testing.T) {
 	dir := t.TempDir()
 	// a python virtualenv dist-info tree (the reported false-positive source)
@@ -337,7 +423,7 @@ func TestWalkDirSkipsDependencyTreesAndLockfiles(t *testing.T) {
 	// a real secret-bearing file that must still be walked
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=s3cr3tValue123"), 0o600)
 
-	srcs, err := WalkDir(dir, nil)
+	srcs, _, err := WalkDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +475,7 @@ func TestWalkDirPicksUpIDEConfigs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(vsc, "settings.json"), []byte(`{"editor.fontSize":12}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srcs, err := WalkDir(dir, nil)
+	srcs, _, err := WalkDir(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +498,7 @@ func TestWalkDirReadsLargeVSCDBByHeader(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "state.vscdb"), big, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srcs, _ := WalkDir(dir, nil)
+	srcs, _, _ := WalkDir(dir, nil, nil)
 	var found *Source
 	for i := range srcs {
 		if filepath.Base(srcs[i].Label) == "state.vscdb" {
