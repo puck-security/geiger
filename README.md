@@ -82,6 +82,11 @@ geiger --metadata --live --intrusive   # + in-cluster k8s RBAC, secrets-store dr
 # a whole repo / dir (walked; results sorted by impact)
 geiger --live ./leaked-repo
 
+# a Windows file share, e.g. SYSVOL (GPP cpassword, logon scripts). geiger reads
+# the share through the OS, so authenticate the session first with `net use`:
+net use \\example.local\SYSVOL /user:DOMAIN\user *
+geiger --live \\example.local\SYSVOL
+
 # a scanner's report — e.g. a TruffleHog sweep of a compromised laptop,
 # exactly what supply-chain worms (Shai-Hulud) run; triage which creds reach prod
 geiger --live --from-trufflehog trufflehog.json

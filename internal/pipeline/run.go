@@ -745,8 +745,15 @@ func titleFor(b parse.Blob, m recognize.Match) string {
 	if m.Line > 0 {
 		loc += fmt.Sprintf(":%d", m.Line)
 	}
-	if red == "" {
-		return fmt.Sprintf("%s (from %s: %s)", m.Module, loc, src)
+	// For a file source the label is the path, which loc already carries, so
+	// don't print it twice — that doubled long paths and pushed them past the
+	// renderer's length cap, cutting the tail off.
+	prov := loc
+	if src != "" && !strings.HasPrefix(loc, src) {
+		prov = fmt.Sprintf("%s: %s", loc, src)
 	}
-	return fmt.Sprintf("%s %s (from %s: %s)", m.Module, red, loc, src)
+	if red == "" {
+		return fmt.Sprintf("%s (from %s)", m.Module, prov)
+	}
+	return fmt.Sprintf("%s %s (from %s)", m.Module, red, prov)
 }
