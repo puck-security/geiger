@@ -6,9 +6,11 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/url"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -330,6 +332,94 @@ func (bt *Batch) RunConcurrent(srcs []Source, emit func(Result), progress func(d
 	}
 	close(jobs)
 	wg.Wait()
+	return all
+}
+
+// RunSeq triages a STREAM of sources, reading and freeing each before the next,
+// so peak memory does not scale with the number of sources — only the results
+// (which are small, and few) accumulate. It is the scanning-path counterpart to
+// RunConcurrent, which takes an already-materialized slice. emit (may be nil)
+// fires per result; progress (may be nil) fires with the running count of
+// completed sources. Both callbacks are serialized.
+//
+// On the dry-run path it keeps input order — so secret dedupe (first sighting)
+// is deterministic — while recognizing ahead in parallel. On the live path it
+// triages through a worker pool; dedupe order there is not guaranteed, exactly
+// as with RunConcurrent. Duplicate locations are recorded for AnnotateDuplicates.
+func (bt *Batch) RunSeq(seq iter.Seq[Source], emit func(Result), progress func(done int)) []Result {
+	var (
+		mu   sync.Mutex
+		all  []Result
+		done int
+	)
+	finish := func(rs []Result) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, r := range rs {
+			if emit != nil {
+				emit(r)
+			}
+			all = append(all, r)
+		}
+		done++
+		if progress != nil {
+			progress(done)
+		}
+	}
+	if bt.opts.Live {
+		// Network-bound: triage through a worker pool. The channel bounds how many
+		// sources are resident at once, so memory stays flat on a huge tree.
+		conc := bt.opts.Concurrency
+		if conc <= 0 {
+			conc = defaultConcurrency
+		}
+		jobs := make(chan Source, conc)
+		var wg sync.WaitGroup
+		for range conc {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for s := range jobs {
+					finish(runBlob(s.Blob, bt.reg, bt.opts, bt.st, 0))
+				}
+			}()
+		}
+		for s := range seq {
+			jobs <- s
+		}
+		close(jobs)
+		wg.Wait()
+		return all
+	}
+	// Dry-run: recognition is a pure function of the blob, so recognize ahead in
+	// parallel, but triage in input order so dedupe stays deterministic. The
+	// bounded futures channel caps how many sources are read ahead and resident.
+	w := runtime.NumCPU()
+	if w > maxLoadWorkers {
+		w = maxLoadWorkers
+	}
+	if w < 1 {
+		w = 1
+	}
+	type fut struct {
+		s Source
+		m []recognize.Match
+	}
+	futs := make(chan chan fut, w)
+	go func() {
+		for s := range seq {
+			ch := make(chan fut, 1)
+			go func(s Source) {
+				ch <- fut{s, recognize.Recognize(s.Blob, bt.opts.Endpoint, bt.reg)}
+			}(s)
+			futs <- ch // blocks when w are in flight — backpressure bounds memory
+		}
+		close(futs)
+	}()
+	for ch := range futs {
+		f := <-ch
+		finish(triageBlob(f.s.Blob, f.m, bt.reg, bt.opts, bt.st, 0))
+	}
 	return all
 }
 

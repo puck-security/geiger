@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"slices"
 	"sort"
@@ -35,16 +36,16 @@ var version = "dev"
 // config holds the parsed CLI flags, so the core can run against injectable
 // writers (and a test can prove stdout is independent of the stderr status).
 type config struct {
-	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, gitHistory, verbose, stream, quiet, noReverse, useMetadata, browser, allExts, spawnStdio bool
-	redact, confirmRedact                                                                                                                                            bool
-	awsIntrusive, slackIntrusive, githubIntrusive, gitlabIntrusive, gcpIntrusive, azureIntrusive                                                                     bool
-	oktaIntrusive, vaultIntrusive, snowIntrusive, cfIntrusive                                                                                                        bool
-	awsAssume                                                                                                                                                        string
-	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                                                   string
-	userAgent, minSeverity, output, replacements                                                                                                                     string
-	timeout                                                                                                                                                          time.Duration
-	concurrency, minSevRank                                                                                                                                          int
-	args                                                                                                                                                             []string
+	live, intrusive, minFootprint, useEnv, correlate, trace, asJSON, sarif, gitHistory, verbose, stream, quiet, noReverse, useMetadata, browser, allExts, spawnStdio, scanBinary bool
+	redact, confirmRedact                                                                                                                                                        bool
+	awsIntrusive, slackIntrusive, githubIntrusive, gitlabIntrusive, gcpIntrusive, azureIntrusive                                                                                 bool
+	oktaIntrusive, vaultIntrusive, snowIntrusive, cfIntrusive                                                                                                                    bool
+	awsAssume                                                                                                                                                                    string
+	endpoint, proxy, fromGitleaks, fromTrufflehog, fromNuclei, fromKingfisher, contextTerms, colorMode, only, skip                                                               string
+	userAgent, minSeverity, output, replacements                                                                                                                                 string
+	timeout                                                                                                                                                                      time.Duration
+	concurrency, minSevRank                                                                                                                                                      int
+	args                                                                                                                                                                         []string
 }
 
 func main() {
@@ -78,6 +79,7 @@ func main() {
 	flag.StringVar(&c.fromKingfisher, "from-kingfisher", "", "ingest a Kingfisher JSON/JSONL report and triage each finding; '-' reads stdin")
 	flag.StringVar(&c.contextTerms, "context", "", "comma-separated crown-jewel terms (account ids, prod hosts, critical repos) that raise a credential's tier when matched")
 	flag.BoolVar(&c.gitHistory, "git-history", false, "also scan blobs in a repository's git history (catches credentials deleted from the working tree)")
+	flag.BoolVar(&c.scanBinary, "scan-binary", false, "also scan files that look binary when walking a directory (off by default; a directly named file is always read)")
 	flag.BoolVar(&c.correlate, "ssh-correlate", false, "for SSH keys, read local hints (~/.ssh/config, known_hosts, shell history) to list candidate target hosts")
 	flag.BoolVar(&c.trace, "trace", false, "print the raw request and response of each call (secrets masked); implies showing all calls")
 	flag.StringVar(&c.colorMode, "color", "auto", "colorize output: auto|always|never")
@@ -315,10 +317,10 @@ func (c config) showResult(r pipeline.Result, ctx score.Context) bool {
 
 // runSorted is the default: triage every source, then sort by blast radius so
 // the highest-impact credential prints first.
-func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, opts pipeline.Options, ctx score.Context, c config, extra []pipeline.Result) int {
+func runSorted(stdout, stderr io.Writer, st *status, seq iter.Seq[pipeline.Source], opts pipeline.Options, ctx score.Context, c config, extra []pipeline.Result) int {
 	bt := pipeline.NewBatch(gmodule.Default, opts)
-	results := bt.RunConcurrent(sources, nil, func(done int) {
-		st.update("triaging %d/%d", done, len(sources))
+	results := bt.RunSeq(seq, nil, func(done int) {
+		st.update("triaging %d", done)
 	})
 	bt.AnnotateDuplicates(results) // note any secret also found in other files
 	st.clear()
@@ -376,10 +378,10 @@ func runSorted(stdout, stderr io.Writer, st *status, sources []pipeline.Source, 
 // including the rotate-first queue — is still computed across everything, so the
 // "what to fix first" takeaway survives the loss of ordering. No recon progress
 // line here: the streamed results are the feedback.
-func runStream(stdout, stderr io.Writer, sources []pipeline.Source, opts pipeline.Options, ctx score.Context, c config, extra []pipeline.Result) int {
+func runStream(stdout, stderr io.Writer, seq iter.Seq[pipeline.Source], opts pipeline.Options, ctx score.Context, c config, extra []pipeline.Result) int {
 	bt := pipeline.NewBatch(gmodule.Default, opts)
 	printed := 0
-	all := bt.RunConcurrent(sources, func(r pipeline.Result) {
+	all := bt.RunSeq(seq, func(r pipeline.Result) {
 		if !c.showResult(r, ctx) {
 			return
 		}
@@ -928,6 +930,8 @@ flags:
   --intrusive         connect to DBs / cluster APIs, harvest downstream secrets
                       (read-only; requires --live)
   --min-footprint     OPSEC: identity call only, skip inventory fan-out
+  --scan-binary       also scan binary-looking files found in a directory walk
+                      (off by default; a directly named file is always read)
   --env               read current environment variables
   --metadata          harvest cloud instance-metadata creds (AWS/GCP/Azure/k8s/…); needs --live
   --browser           model malicious-extension impact: score Chrome/Edge extensions;
@@ -1002,7 +1006,24 @@ func printModuleListing(w io.Writer) error {
 	return err
 }
 
-func readSources(c config, st *status) ([]pipeline.Source, error) {
+// sliceSeq turns an already-materialized slice into a source stream.
+func sliceSeq(srcs []pipeline.Source) iter.Seq[pipeline.Source] {
+	return func(yield func(pipeline.Source) bool) {
+		for _, s := range srcs {
+			if !yield(s) {
+				return
+			}
+		}
+	}
+}
+
+// readSources returns the inputs to triage as a lazy stream. Small, bounded
+// inputs (stdin, env, scanner reports, instance metadata, a named file or
+// archive) are built up front; a directory is walked lazily so its files are
+// read one at a time during triage and never held in memory all at once. Upfront
+// errors (a missing path, a bad report) are returned before the stream starts;
+// unreadable entries encountered mid-walk are skipped.
+func readSources(c config, st *status) (iter.Seq[pipeline.Source], error) {
 	if c.useMetadata {
 		st.update("probing instance metadata…")
 		creds, clouds, err := imds.Harvest(context.Background(), imds.Options{})
@@ -1020,91 +1041,37 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 		for _, cr := range creds {
 			srcs = append(srcs, pipeline.Source{Label: cr.Label, Blob: parse.Parse(cr.Blob, cr.Label)})
 		}
-		return srcs, nil
+		return sliceSeq(srcs), nil
 	}
 	if c.useEnv {
-		return []pipeline.Source{{Label: "environment", Blob: parse.FromEnv(os.Environ())}}, nil
+		return sliceSeq([]pipeline.Source{{Label: "environment", Blob: parse.FromEnv(os.Environ())}}), nil
 	}
 	if c.fromGitleaks != "" {
-		return pipeline.FromGitleaks(c.fromGitleaks)
+		srcs, err := pipeline.FromGitleaks(c.fromGitleaks)
+		return sliceSeq(srcs), err
 	}
 	if c.fromTrufflehog != "" {
-		return pipeline.FromTrufflehog(c.fromTrufflehog)
+		srcs, err := pipeline.FromTrufflehog(c.fromTrufflehog)
+		return sliceSeq(srcs), err
 	}
 	if c.fromNuclei != "" {
-		return pipeline.FromNuclei(c.fromNuclei)
+		srcs, err := pipeline.FromNuclei(c.fromNuclei)
+		return sliceSeq(srcs), err
 	}
 	if c.fromKingfisher != "" {
-		return pipeline.FromKingfisher(c.fromKingfisher)
+		srcs, err := pipeline.FromKingfisher(c.fromKingfisher)
+		return sliceSeq(srcs), err
 	}
 	if c.browser && len(c.args) == 0 {
 		// --browser produces Notes directly (injected in run); with no file/stdin
 		// input there are no credential sources to read — don't fall through to the
 		// stdin-required guard below.
 		if fi, _ := os.Stdin.Stat(); fi.Mode()&os.ModeCharDevice != 0 {
-			return nil, nil
+			return sliceSeq(nil), nil
 		}
 	}
 	if len(c.args) > 0 {
-		// Multiple paths (files, dirs, or scanner reports) are merged, so a deeper
-		// second pass can target just the few files that mattered.
-		var all []pipeline.Source
-		scanned := 0
-		for _, path := range c.args {
-			info, err := os.Stat(path)
-			if err != nil {
-				return nil, err
-			}
-			switch {
-			case info.IsDir():
-				base := scanned
-				srcs, err := pipeline.WalkDir(path, func(n int) {
-					if (base+n)%64 == 0 {
-						st.update("scanning %s — %d files", path, base+n)
-					}
-				})
-				if err != nil {
-					return nil, err
-				}
-				scanned += len(srcs)
-				all = append(all, srcs...)
-				// History is opt-in: it is unbounded, and reading it would change
-				// the cost of pointing geiger at a repo.
-				if c.gitHistory {
-					hbase := scanned
-					hist, err := pipeline.GitHistorySources(path, func(n int) {
-						if (hbase+n)%64 == 0 {
-							st.update("reading git history of %s — %d blobs", path, n)
-						}
-					})
-					if err != nil {
-						return nil, err
-					}
-					scanned += len(hist)
-					all = append(all, hist...)
-				}
-			case pipeline.LooksLikeGitleaks(path):
-				srcs, err := pipeline.FromGitleaks(path)
-				if err != nil {
-					return nil, err
-				}
-				all = append(all, srcs...)
-			default:
-				// A tarball/zip named directly is expanded like a directory would
-				// be — IR is usually handed the archive, not the extracted tree.
-				if srcs, ok := pipeline.SourcesFromArchive(path); ok {
-					scanned += len(srcs)
-					all = append(all, srcs...)
-					break
-				}
-				data, err := os.ReadFile(path)
-				if err != nil {
-					return nil, err
-				}
-				all = append(all, pipeline.Source{Label: path, Blob: parse.Parse(string(data), path)})
-			}
-		}
-		return all, nil
+		return argSources(c, st)
 	}
 	// stdin
 	fi, _ := os.Stdin.Stat()
@@ -1116,5 +1083,81 @@ func readSources(c config, st *status) ([]pipeline.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []pipeline.Source{{Label: "stdin", Blob: parse.Parse(string(data), "stdin")}}, nil
+	return sliceSeq([]pipeline.Source{{Label: "stdin", Blob: parse.Parse(string(data), "stdin")}}), nil
+}
+
+// argSources builds the stream for one or more path arguments, in argument
+// order. A directory is a lazy walk segment (read during triage); everything
+// else — a named file, an archive, a scanner report, git history — is read up
+// front so its errors surface before the stream starts. A file named directly
+// is read whole even if it looks binary; the walk's binary skip applies only to
+// files it discovers, controlled by --scan-binary.
+func argSources(c config, st *status) (iter.Seq[pipeline.Source], error) {
+	type segment struct {
+		dir   string // non-empty: walk this directory lazily
+		eager []pipeline.Source
+	}
+	var segs []segment
+	cfg := pipeline.WalkConfig{ScanBinary: c.scanBinary}
+	for _, path := range c.args {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case info.IsDir():
+			segs = append(segs, segment{dir: path})
+			// History is opt-in: it is unbounded, and reading it would change the
+			// cost of pointing geiger at a repo.
+			if c.gitHistory {
+				hist, err := pipeline.GitHistorySources(path, func(n int) {
+					if n%64 == 0 {
+						st.update("reading git history of %s — %d blobs", path, n)
+					}
+				})
+				if err != nil {
+					return nil, err
+				}
+				segs = append(segs, segment{eager: hist})
+			}
+		case pipeline.LooksLikeGitleaks(path):
+			srcs, err := pipeline.FromGitleaks(path)
+			if err != nil {
+				return nil, err
+			}
+			segs = append(segs, segment{eager: srcs})
+		default:
+			// A tarball/zip named directly is expanded like a directory would be —
+			// IR is usually handed the archive, not the extracted tree.
+			if srcs, ok := pipeline.SourcesFromArchive(path); ok {
+				segs = append(segs, segment{eager: srcs})
+				break
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			segs = append(segs, segment{eager: []pipeline.Source{{Label: path, Blob: parse.Parse(string(data), path)}}})
+		}
+	}
+	return func(yield func(pipeline.Source) bool) {
+		for _, seg := range segs {
+			if seg.dir != "" {
+				// No per-file status here: the batch's triage progress ("triaging
+				// N") already climbs per source as the walk feeds it, and two
+				// counters on one status line just flicker.
+				for s := range pipeline.WalkDirSeq(seg.dir, cfg, nil) {
+					if !yield(s) {
+						return
+					}
+				}
+				continue
+			}
+			for _, s := range seg.eager {
+				if !yield(s) {
+					return
+				}
+			}
+		}
+	}, nil
 }

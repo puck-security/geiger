@@ -320,6 +320,14 @@ round-trip, so it scales with `--concurrency` and rate limits, not corpus size.
 `--intrusive` is slower due to DB handshakes, secret-manager fan-out,
 recursive triage.
 
+A directory scan streams: geiger reads a file, triages it, keeps the small
+result, and frees the file before the next. Peak memory stays flat no matter how
+large the tree, so you can point it at a whole drive or a network share — the
+cost is time and disk, not RAM. A file over 8 MB is read in overlapping windows
+rather than skipped, so a large log or memory dump is still covered. Files that
+look binary are skipped by default; add `--scan-binary` to include them (a file
+named directly on the command line is always read).
+
 ---
 
 ## Reference
@@ -367,6 +375,7 @@ recursive triage.
 | `--confirm-redact` | with `--dangerous-redact`, do the rewrite. No backup, no undo |
 | `--redact-replacements FILE` | with `--confirm-redact`, also write a `git filter-repo --replace-text` file (`0600`) for scrubbing git history |
 | `--git-history` | also scan blobs in a repository's git history — catches credentials deleted from the working tree but still recoverable from the repo (needs `git` on PATH) |
+| `--scan-binary` | also scan files that look binary when walking a directory (off by default; a directly named file is always read) |
 | `--ssh-correlate` | SSH: read local hints for candidate target hosts |
 | `--trace` | print the raw request + response of each call (secrets masked) |
 | `--user-agent UA` | User-Agent for recon calls (default `geiger/<version>`) |

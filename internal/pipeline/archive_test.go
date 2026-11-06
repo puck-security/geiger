@@ -93,7 +93,7 @@ func TestZipMembersBecomeSources(t *testing.T) {
 		"home/sub/x.conf": "TOKEN=abc\n",
 	})
 
-	got, err := WalkDir(dir, nil)
+	got, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestTarGzMembersBecomeSources(t *testing.T) {
 	}), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := WalkDir(dir, nil)
+	got, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestGzipSingleFileBecomesOneSource(t *testing.T) {
 	if err := os.WriteFile(gp, buf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := WalkDir(dir, nil)
+	got, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestNestedArchiveStopsAtDepthLimit(t *testing.T) {
 	if err := os.WriteFile(outer, tarGzBytes(t, map[string]string{"outer/mid.tar.gz": string(mid)}), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := WalkDir(dir, nil)
+	got, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestArchiveMemberCapStopsExpansion(t *testing.T) {
 	zp := filepath.Join(dir, "many.zip")
 	writeZip(t, zp, members)
 
-	got, err := WalkDir(dir, nil)
+	got, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestArchiveByteBudgetStopsExpansion(t *testing.T) {
 	zp := filepath.Join(dir, "bomb.zip")
 	writeZip(t, zp, members)
 
-	got, err := WalkDir(dir, nil)
+	got, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestTraversingMemberNameIsCleaned(t *testing.T) {
 	}), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := WalkDir(dir, nil)
+	got, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestArchiveExpansionKeepsWalkOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, err := WalkDir(dir, nil)
+	first, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestArchiveExpansionKeepsWalkOrder(t *testing.T) {
 		t.Fatalf("want 24 sources, got %d", len(want))
 	}
 	for run := range 8 {
-		got, err := WalkDir(dir, nil)
+		got, err := WalkDir(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
