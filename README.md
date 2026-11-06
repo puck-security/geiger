@@ -18,11 +18,11 @@ Your secret scanner found a key but it won't tell you if it's still live or what
 unlocks. 
 
 `geiger` does: pipe any credential-bearing text at it and it recognizes the
-credentials inside, runs read-only recon with each, and ranks what they actually
-reach by blast radius.
+credentials inside, runs read-only recon with each, and ranks what they reach by
+blast radius.
 
-Triage: an incident responder's *"how bad is this?"* and a pentester's
-*"what does this key reach?"*. Read-only by construction, dry-run by default.
+Triage for an incident responder ("how bad is this?") and a pentester ("what
+does this key reach?"). Read-only, and dry-run by default.
 
 ---
 
@@ -46,14 +46,14 @@ go build -o geiger ./cmd/geiger
 ## Tutorial
 
 geiger doesn't touch anything on the network until you say so. Dry-run first
-(default): it recognizes the credential and prints the read-only calls it *would*
+(default): it recognizes the credential and prints the read-only calls it would
 make. Try it on AWS's well-known example keys — no real secret needed:
 
 ```sh
 printf 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n' | geiger
 ```
 
-That prints the read-only calls it *would* run (`sts:GetCallerIdentity`, …). Add
+That prints the read-only calls it would run (`sts:GetCallerIdentity`, …). Add
 `--live` with a real credential to actually run them and get the impact note:
 
 ```sh
@@ -75,7 +75,7 @@ geiger --env --live
 
 # this box's own cloud identity — harvest the instance-metadata credential
 # (AWS instance role, GCP/Azure managed identity, k8s in-cluster SA, …) and
-# triage what it reaches. The post-exploitation question, answered read-only.
+# triage what it reaches.
 geiger --metadata --live
 geiger --metadata --live --intrusive   # + in-cluster k8s RBAC, secrets-store drain
 
@@ -87,18 +87,15 @@ geiger --live ./leaked-repo
 net use \\example.local\SYSVOL /user:DOMAIN\user *
 geiger --live \\example.local\SYSVOL
 
-# a scanner's report — e.g. a TruffleHog sweep of a compromised laptop,
-# exactly what supply-chain worms (Shai-Hulud) run; triage which creds reach prod
+# a scanner's report — a TruffleHog or gitleaks sweep of a compromised
+# laptop. Triage which creds reach prod.
 geiger --live --from-trufflehog trufflehog.json
 geiger --live --from-gitleaks gitleaks-report.json
 
-# external recon: pipe a nuclei exposure scan straight in. Its templates pull the
-# leaked value out of each exposed endpoint (/.env, phpinfo, instance metadata);
-# geiger types, validates, and ranks it, and records the URL it leaked from. It
-# also parses the response body when present, reassembling multi-field creds (an
-# AWS key+secret pair, a connection string) the flat extracted-results can't —
-# run nuclei with -irr to include the body.
-# Stream over a pipe so live secrets never land on disk (add -o only if you must).
+# external recon: pipe a nuclei exposure scan straight in. geiger types,
+# validates, and ranks each leaked value, and records the URL it leaked from.
+# Run nuclei with -irr to include response bodies (multi-field creds); stream
+# over a pipe so live secrets never land on disk.
 nuclei -t exposures/ -l targets.txt -j -irr | geiger --live --from-nuclei -
 
 # rank by YOUR crown jewels (boost anything touching these to HIGH+)
@@ -123,16 +120,16 @@ Cassandra) with fixed queries, reads local SQLite and IDE stores in place, and
 calls cluster APIs. It follows secrets-store reads, draining Vault, Doppler,
 1Password, and the cloud secret managers (AWS SM, GCP SM, Azure Key Vault) and
 triaging each value. It also redeems cached Azure and GCP refresh tokens to map
-their reach, which writes a sign-in to the audit log. This is the fan-out a worm
-performs, so you see the *real* blast radius. Plain `--live` stays read-only and
-never redeems a refresh token.
+their reach, which writes a sign-in to the audit log. It shows the blast radius a
+credential actually reaches, not only what it can see. Plain `--live` stays
+read-only and never redeems a refresh token.
 
 ```sh
 geiger --live --intrusive .env
 ```
 
 **Deeper, per service — `--<service>-intrusive`.** Each major provider has a
-read-only deep tier. It shows what a leaked credential can *do*, not only what it
+read-only deep tier. It shows what a leaked credential can do, not only what it
 can see. The flags table lists every flag. These tiers are separate from
 `--intrusive` because they are call-heavy and specific to one provider.
 
@@ -165,25 +162,13 @@ geiger --live ~/.ssh            # fingerprint + test GitHub/GitLab/Bitbucket acc
 geiger --ssh-correlate ~/.ssh   # + guess other target hosts from local hints
 ```
 
-**Browser extensions** — `--browser` models the impact of a malicious Chromium-family
-(Chrome, Edge, Brave, Chromium, Vivaldi) extension (CursedChrome-style proxy, infostealer, sideloaded MV3). It scores each
-installed extension's permission union — `cookies` + broad host access + request
-interception / script injection / proxy = read every site's session cookies and
-pivot through the browser — and flags sideloaded/unpacked ones (unsigned, not
-content-verified). With `--live --intrusive` it also inventories the live sessions
-such an extension would reach from the Cookies store *metadata* (domains only — the
-values are keychain-encrypted), ranked by blast radius (IdP/SSO sessions first).
-
-Because an unsigned all-sites extension is capability-identical to a real
-CursedChrome, geiger doesn't guess intent — for each flagged sideloaded extension
-it builds a **responder triage bundle**: install age, UI surface, dev-project
-markers, the extension id, and a low-false-positive grep of its on-disk code (and,
-under `--intrusive`, its LevelDB storage) for hardcoded remote hosts (websocket /
-public-IP endpoints) to **verify against egress/DNS logs**. Everything is emitted
-as clean IOCs in `--json` (`detail` arrays) for a SIEM.
-
-By default only extensions with risky reach are shown; narrow/benign ones are
-collapsed into a count. `--all` lists every installed extension (a full inventory).
+**Browser extensions** — `--browser` models the impact of a malicious
+Chromium-family extension (Chrome, Edge, Brave, Chromium, Vivaldi): a
+CursedChrome-style proxy, an infostealer, or a sideloaded MV3 extension. It scores
+the permissions each extension holds, flags sideloaded ones, and builds a responder
+triage bundle. With `--live --intrusive` it also inventories the live sessions the
+extension would reach, from the Cookies store metadata (domains only). See
+[docs/browser-extensions.md](docs/browser-extensions.md).
 
 ```sh
 geiger --browser                    # score extensions + triage bundle
@@ -193,13 +178,12 @@ geiger --browser --json             # IOCs (extension id, hosts) for a SIEM
 ```
 
 **Agentic reach** — point geiger at an agent config, a repo, or a home directory
-and it maps what the agent's *tool chain* reaches. This is on by default: no flag,
-it just happens when a config turns up in the walk.
-
-The credential axis and the reach axis are separate, and that is the point. A
-config whose every secret is stored properly — OS env, a keychain, an OAuth flow —
-can still wire the agent to a filesystem server rooted at `/`, a shell server, and
-the corporate wiki. Perfect credential hygiene bounds none of that.
+and it maps what the agent's tools can reach, not only the secrets in the file.
+This runs by default when a config turns up in the walk. geiger labels what each
+tool can do, then sets the severity from the dangerous combinations — reach that
+exists only because the tools share one context window (the lethal trifecta,
+bulk read plus a way out, exec on the host). See
+[docs/agentic-reach.md](docs/agentic-reach.md).
 
 ```sh
 geiger ~/.claude.json                    # what this agent's tools reach
@@ -208,60 +192,11 @@ geiger --live ~/.cursor/mcp.json         # enumerate remote servers' real tool l
 geiger --live --spawn-stdio ~/.claude    # + run local stdio servers to enumerate them
 ```
 
-Each server is typed into **reach primitives** — `exec`, `corpus-search`,
-`secrets-read`, `code-write`, `cloud-control`, `fs-read`/`fs-write` *with their root
-path*, `data-read`, `net-egress`, `untrusted-in`, `destructive`, `identity-admin`.
-Bulk store search is deliberately its own primitive: *"give me every credential in
-Confluence"* is one tool call and the highest-yield move in a real engagement, so
-folding it into a generic "reads data" would bury it.
-
-That list is inventory, and it does not set a tier. A config file says what an
-agent is wired to; it cannot say whether that is appropriate for the machine it
-is on, and a filesystem server scoped to a project directory is the normal setup.
-An ordinary developer laptop scores INFO.
-
-The tier comes from the **compositions** — reach that exists only because the
-tools share one context window, which no per-component scanner can see:
-
-| Chain | Why it matters |
-|---|---|
-| lethal trifecta | untrusted content, private data and a way out in one context — one poisoned page and the agent leaks what it can read |
-| bulk read plus a way out | search the store, send the results. Two tool calls, no exploit |
-| exec on this host | an `exec` tool makes the agent's reach the host's reach: every credential on the box, geiger's other findings in the same run included |
-| reads a secret store | tool-chain access becomes credentials that outlive the session |
-| shared context | a low-trust server sharing a context with a high-reach one |
-| unpinned package | `npx -y` / `uvx` refetch at every launch, so the code that runs tomorrow need not be the code in the config |
-
-Alongside those, three things the file itself establishes: a filesystem root that
-is the whole disk or home directory rather than a project, **no approval prompt**
-(`permissions.allow`, `alwaysAllow`, YOLO mode), scored as a property of the whole
-surface because it removes the human from every chain at once, and — under
-`--live` only — a server that answers with no credential (enumeration sends
-none, so the token in the config is not what gates it) or is reached over
-plaintext. **Hooks** are inventoried too: they run shell on lifecycle events with
-no model and no approval in that path, and nothing else lists them.
-
-Runtimes read: Claude Code and Claude Desktop, Cursor, VS Code, Windsurf,
-Cline/Roo/Kilo, Continue, Gemini CLI, Zed, Codex, Goose.
-
-**Honest by construction.** The note always says where the reach came from: read
-from the config (what these packages are known to do) or reported by the servers
-themselves. A surface whose servers type to nothing at all reads `UNKNOWN` rather
-than getting a severity invented from a guess.
-
-The two flags split by transport. `--live` enumerates the **remote** servers'
-real tool lists over http (`tools/list`, read-only; `tools/call` is never
-issued). A **local** stdio server is only asked under `--spawn-stdio`, because
-asking it means running the command in the config — a separate flag from
-`--intrusive` on purpose: executing an argv that came out of the scanned file is
-worse than anything `--intrusive` permits. Each server line says which it is
-(`stdio <command>` or a URL) and whether it was asked.
-
-See [docs/design/agentic-reach.md](docs/design/agentic-reach.md) for the design.
-
-**Redact what geiger found** — once you have rotated (or decided to rotate)
-what a scan turned up, geiger can strip the values from the files it read, so a
-backup directory or an old dotfile stops leaking the same credentials again:
+**Redact what geiger found** — once you have rotated (or decided to rotate) what a
+scan turned up, geiger can strip the values from the files it read, so a backup
+directory or an old dotfile stops leaking the same credentials again. It plans
+first and writes nothing without `--confirm-redact`. It keeps no backup and
+revokes nothing. See [docs/redact.md](docs/redact.md).
 
 ```sh
 geiger --dangerous-redact ~/.claude                    # plan only: what would change
@@ -270,24 +205,6 @@ geiger --dangerous-redact --confirm-redact --git-history \
        --redact-replacements /tmp/repl.txt ./repo      # + file for git filter-repo
 git filter-repo --replace-text /tmp/repl.txt           # then scrub the history
 ```
-
-The plan lists each file, and under it each value: the line it sits on, the
-module that recognized it, the variable or JSON path it came from, a masked
-tail to match against the findings report, and the form it was found in. The
-same list is printed after a rewrite, as the record of what changed. A plain
-or JSON-escaped value is a text swap: the file keeps its shape and only the
-value changes. A value stored as base64 (a docker `auth` blob, a kubeconfig
-key) is replaced too, but the placeholder does not decode, so the consumer of
-that file errors until the value is replaced. Anything else is listed under a
-warning with the reason and is **not** rewritten: git history blobs (use the
-replacements file), archive members, symlinks, binary and SQLite stores, values
-harvested from a secrets store, and values that were transformed before geiger
-saw them.
-
-Two things it will not do. It keeps no backup: a backup would hold the secrets
-again. And it revokes nothing: a redacted file is one that stops re-leaking,
-not a rotated credential. It refuses to run on stdin, `--env`, `--metadata`,
-`--browser`, or a scanner report, since none of those is a file it read itself.
 
 ---
 
@@ -376,7 +293,7 @@ named directly on the command line is always read).
 | `--from-gitleaks F` / `--from-trufflehog F` | triage each finding in a scanner report |
 | `--from-nuclei F` | triage each value extracted by a nuclei JSONL (`-j`) scan; `F` = `-` reads stdin (stream over a pipe) |
 | `--from-kingfisher F` | triage each finding in a Kingfisher JSON/JSONL report (not `--redact`ed — geiger needs the value); `F` = `-` reads stdin. Their finding fingerprint is carried through to `--json`/`--sarif` so their viewer dedupes against its own findings |
-| `--dangerous-redact` | plan an in-place rewrite of the scanned files that replaces each found credential with `REDACTED-BY-GEIGER`; prints the plan, writes nothing. See [Redact what geiger found](#redact-what-geiger-found) |
+| `--dangerous-redact` | plan an in-place rewrite of the scanned files that replaces each found credential with `REDACTED-BY-GEIGER`; prints the plan, writes nothing. See [docs/redact.md](docs/redact.md) |
 | `--confirm-redact` | with `--dangerous-redact`, do the rewrite. No backup, no undo |
 | `--redact-replacements FILE` | with `--confirm-redact`, also write a `git filter-repo --replace-text` file (`0600`) for scrubbing git history |
 | `--git-history` | also scan blobs in a repository's git history — catches credentials deleted from the working tree but still recoverable from the repo (needs `git` on PATH) |
@@ -408,7 +325,7 @@ geiger triages a credential **you were handed**, or one **sitting on disk**.
 - **Out of scope — in-process / OS-bound.** Chromium passwords & cookies (wrapped
   by DPAPI / macOS Keychain / Secret Service), raw DPAPI blobs, the macOS
   Keychain, LSASS. Reading those means decrypting against a live OS session —
-  credential *extraction from a host*, not triage of one. Not always a black and white line.
+  that is credential extraction from a host, not triage of one.
   (`--browser` models the extension-capability and session-*metadata* angle — which
   domains have a live session, which extension could reach them — without decrypting
   the cookie values; see **Browser extensions** above.)
@@ -715,37 +632,13 @@ fields. `--trace` shows the raw request/response (secrets masked).
 
 ## How it works
 
-**Pipeline:** recognize → (authenticate) → recon → note. Recon runs the
-identity/whoami call first, then a couple of count calls to size reach.
+Pipeline: recognize → (authenticate) → recon → note. geiger makes no write calls,
+and runs dry by default. `--live` is required to make calls, and it always prints
+the destinations it hits. See [docs/internals.md](docs/internals.md) for the full
+safety model, endpoint provenance, and what the analysis does not do.
 
-**Safety model**
-- **Read-only by construction.** One client allows only `GET`/`HEAD` plus a short
-  allowlist of read-only POSTs (STS `GetCallerIdentity`, k8s
-  `SelfSubjectRulesReview`, the single OAuth token exchange). DB recon uses a
-  read-only session and a fixed query allowlist. Local stores (SQLite, IDE
-  `state.vscdb`, Firefox key4.db) open read-only. A guard test enforces this
-  across every module.
-- **Dry-run by default.** `--live` is required and always prints the destinations
-  it hits (real provider APIs, and their audit logs).
-- **Attribution.** Recon identifies itself as `geiger/<version>` — dual use beware, 
-  no detection evasion; defenders can attribute the calls.
-- **Secrets are not printed or stored.** Redacted everywhere; scrubbed from URLs,
-  headers, and errors.
-- **Untrusted-input hardening.** Refuses cloud-metadata targets (SSRF), sanitizes
-  hostile API responses, strips file-referencing DSN options
-- **Endpoint provenance.** A host read out of scanned data is untrusted: a planted
-  URL would otherwise aim a real credential at whoever planted it. Every module
-  declares where its credential may go, enforced centrally at recognition time —
-  a SaaS module is pinned to its vendor's domains, `--endpoint` outranks anything
-  in the file, and a violation degrades to "needs endpoint" instead of dialing.
-  Self-hosted services can legitimately live at any domain, so those are not
-  pinned; their destination is flagged in the note instead.
-
-**Principle: likely impact, not perfect impact.** 
-geiger is triage, *not* deep cloud-privesc graphing (use PMapper/CloudFox/ScoutSuite/etc for that).
-
-**Authorized use only.** geiger exercises live credentials — run it only on creds
-you are entitled to triage.
+**Authorized use only.** geiger exercises live credentials. Run it only on
+credentials you are entitled to triage.
 
 ---
 
