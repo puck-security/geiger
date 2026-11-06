@@ -47,6 +47,26 @@ func TestAteraRecon(t *testing.T) {
 	}
 }
 
+func TestNizloRecon(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer nizlo_pat_abcdefghijkl_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ" {
+			t.Errorf("bearer not set: %q", r.Header.Get("Authorization"))
+		}
+		respond(w, `{"email":"ops@example.com","authentication":"access-token","permissions":["devices.view","scripts.run","audit.view"]}`)
+	})
+	got := driveModule(t, "nizlo", module.Fields{"token": "nizlo_pat_abcdefghijkl_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"}, mux)
+	if got["user"].Value != "ops@example.com" || got["permissions"].Value != "3" {
+		t.Errorf("nizlo identity or permission count wrong: %+v", got)
+	}
+	if got["privileged reach"].Flag != module.FlagForceMultiplier {
+		t.Errorf("script execution should be force multiplier: %+v", got["privileged reach"])
+	}
+	if got["estate visibility"].Flag != module.FlagWarn {
+		t.Errorf("read access should be warning: %+v", got["estate visibility"])
+	}
+}
+
 func TestKandjiRecon(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
@@ -272,6 +292,8 @@ func TestEndpointMgmtRecognizers(t *testing.T) {
 	}{
 		{"ninjaone set-shape", "NINJA_CLIENT_ID=cid\nNINJA_CLIENT_SECRET=csec\n", "ninjaone", "csec"},
 		{"atera", "ATERA_API_KEY=ak123\n", "atera", "ak123"},
+		{"nizlo env", "NIZLO_API_TOKEN=nizlo_pat_abcdefghijkl_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ\n", "nizlo", "nizlo_pat_abcdefghijkl_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"},
+		{"nizlo shape", "token: nizlo_pat_abcdefghijkl_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ\n", "nizlo", "nizlo_pat_abcdefghijkl_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"},
 		{"automox", "AUTOMOX_API_KEY=ax123\n", "automox", "ax123"},
 		{"jamf oauth", "JAMF_URL=https://acme.jamfcloud.com\nJAMF_CLIENT_ID=c\nJAMF_CLIENT_SECRET=cs\n", "jamf", "cs"},
 		{"fleet token", "FLEET_URL=https://fleet.acme.com\nFLEET_API_TOKEN=ftok\n", "fleet", "ftok"},

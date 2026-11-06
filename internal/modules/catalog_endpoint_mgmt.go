@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/puck-security/geiger/internal/auth"
@@ -23,6 +24,7 @@ import (
 func init() {
 	registerNinjaOne()
 	registerAtera()
+	registerNizlo()
 	registerKandji()
 	registerJamf()
 	registerMosyle()
@@ -144,6 +146,44 @@ func registerAtera() {
 			return []recognize.Match{{Module: "atera", Fields: module.Fields{"token": k}, Secret: k, Label: "ATERA_API_KEY"}}
 		}
 		return nil
+	})
+}
+
+// --- Nizlo: permission-limited personal access token ---
+
+var nizloPATRe = regexp.MustCompile(`\bnizlo_pat_[A-Za-z0-9_-]{12}_[A-Za-z0-9_-]{43}\b`)
+
+func registerNizlo() {
+	add("", r.HTTP{
+		ModuleName: "nizlo", Base: "https://app.nizlo.com/api/v1", Auth: r.AuthSpec{Kind: r.Bearer},
+		Whoami: r.GET("/auth/me").
+			Field("user", "email").
+			CountArrayFlag("permissions", "permissions", infoFlag).
+			Signal(r.Signal{
+				Path: "permissions", Regex: `(?i)(devices\.manage|devices\.reboot|device\.remote|terminal\.access|files\.manage|processes\.kill|services\.manage|software\.manage|scripts\.run|scripts\.manage|patches\.manage|enrollment\.manage|users\.manage)`,
+				Key: "privileged reach", Value: "token can execute or administer high-impact endpoint operations permitted by its current technician role", Flag: fmFlag,
+			}).
+			Signal(r.Signal{
+				Path: "permissions", Regex: `(?i)(devices\.view|files\.access|processes\.view|eventlogs\.view|audit\.view)`,
+				Key: "estate visibility", Value: "token can read endpoint, file, process, event-log, or audit data within its tenant-scoped permissions", Flag: warnFlag,
+			}),
+		Summarize: func([]module.Finding) string {
+			return "Nizlo RMM — tenant-scoped personal token; reach follows its explicit permissions and the technician's current role"
+		},
+	}.Module())
+	recognize.RegisterRecognizer(func(b parse.Blob, _ string, _ *module.Registry) []recognize.Match {
+		seen := map[string]bool{}
+		var out []recognize.Match
+		for _, tok := range append([]string{
+			firstVar(b.Vars, "NIZLO_API_TOKEN", "NIZLO_ACCESS_TOKEN", "NIZLO_TOKEN"),
+		}, nizloPATRe.FindAllString(b.Raw, -1)...) {
+			if tok == "" || seen[tok] {
+				continue
+			}
+			seen[tok] = true
+			out = append(out, recognize.Match{Module: "nizlo", Fields: module.Fields{"token": tok}, Secret: tok, Label: "NIZLO_API_TOKEN"})
+		}
+		return out
 	})
 }
 
