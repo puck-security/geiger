@@ -57,7 +57,7 @@ func TestGitHistoryFindsDeletedCredential(t *testing.T) {
 	dir := newRepo(t)
 
 	// Precondition: the walk alone finds nothing, or this proves nothing.
-	tree, err := WalkDir(dir, nil)
+	tree, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

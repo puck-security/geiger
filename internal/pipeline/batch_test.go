@@ -1,7 +1,9 @@
 package pipeline
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,7 +307,7 @@ func TestWalkDirSkipsNoiseDirs(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755)
 	os.WriteFile(filepath.Join(dir, "node_modules", "junk.js"), []byte("x"), 0o600)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=B"), 0o600)
-	srcs, err := WalkDir(dir, nil)
+	srcs, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +327,89 @@ func TestWalkDirSkipsNoiseDirs(t *testing.T) {
 	}
 }
 
+// Windows system trees are prime hunting ground, not noise: $Recycle.Bin holds
+// deleted configs, Windows.old is a whole previous install with every user
+// profile, and SYSVOL holds GPP cpassword and logon scripts. The walk must still
+// descend into them — only true dependency/build noise (node_modules, etc.) is
+// skipped. This guards against re-adding an OS-dir skip.
+func TestWalkDirWalksWindowsSystemTrees(t *testing.T) {
+	dir := t.TempDir()
+	want := map[string]bool{}
+	for i, rel := range []string{
+		filepath.Join("$Recycle.Bin", "S-1-5-21", "deleted.env"),
+		filepath.Join("Windows.old", "Users", "admin", ".aws", "credentials"),
+		filepath.Join("WinSxS", "manifests", "config.xml"),
+		filepath.Join("SYSVOL", "acme.local", "Policies", "Groups.xml"),
+	} {
+		p := filepath.Join(dir, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(fmt.Sprintf("TOKEN=v%d", i)), 0o600)
+		want[p] = true
+	}
+	srcs, err := WalkDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range srcs {
+		delete(want, s.Label)
+	}
+	for p := range want {
+		t.Errorf("not walked, but should be: %s", p)
+	}
+}
+
+// A file over the per-blob cap is scanned in overlapping windows, not skipped,
+// so a big log/dump is still covered — including a secret that straddles a
+// window boundary.
+func TestWalkDirScansLargeFileInWindows(t *testing.T) {
+	dir := t.TempDir()
+	size := maxFileSize + 4096 // just over the cap: two windows
+	data := bytes.Repeat([]byte("a"), size)
+	later := "LATER_WINDOW_SECRET_abcdef0123456789"
+	copy(data[largeFileWindow+1000:], later) // lands in the second window
+	edge := "EDGE_SECRET_9876543210zyxwvut"
+	copy(data[largeFileWindow-len(edge)/2:], edge) // straddles the window boundary
+	if err := os.WriteFile(filepath.Join(dir, "big.log"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	for s := range WalkDirSeq(dir, WalkConfig{}, nil) {
+		all.WriteString(s.Blob.Raw)
+	}
+	got := all.String()
+	if !strings.Contains(got, later) {
+		t.Error("secret in a later window of a large file was not scanned")
+	}
+	if !strings.Contains(got, edge) {
+		t.Error("secret straddling a window boundary was not scanned (overlap failed)")
+	}
+}
+
+// A file whose content looks binary is skipped by default and scanned only with
+// ScanBinary. A file named directly on the command line is read regardless (see
+// argSources), so this applies to files the walk discovers.
+func TestWalkDirSkipsBinaryUnlessOptedIn(t *testing.T) {
+	dir := t.TempDir()
+	marker := "BINARY_FILE_TOKEN_abcdef0123456789"
+	data := append([]byte{0x00, 0x01, 0x02}, []byte(marker)...)
+	os.WriteFile(filepath.Join(dir, "blob.dat"), data, 0o600)
+
+	has := func(cfg WalkConfig) bool {
+		for s := range WalkDirSeq(dir, cfg, nil) {
+			if strings.Contains(s.Blob.Raw, marker) {
+				return true
+			}
+		}
+		return false
+	}
+	if has(WalkConfig{}) {
+		t.Error("binary file scanned by default; it should be skipped")
+	}
+	if !has(WalkConfig{ScanBinary: true}) {
+		t.Error("binary file not scanned with ScanBinary set")
+	}
+}
+
 func TestWalkDirSkipsDependencyTreesAndLockfiles(t *testing.T) {
 	dir := t.TempDir()
 	// a python virtualenv dist-info tree (the reported false-positive source)
@@ -337,7 +422,7 @@ func TestWalkDirSkipsDependencyTreesAndLockfiles(t *testing.T) {
 	// a real secret-bearing file that must still be walked
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=s3cr3tValue123"), 0o600)
 
-	srcs, err := WalkDir(dir, nil)
+	srcs, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +474,7 @@ func TestWalkDirPicksUpIDEConfigs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(vsc, "settings.json"), []byte(`{"editor.fontSize":12}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srcs, err := WalkDir(dir, nil)
+	srcs, err := WalkDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +497,7 @@ func TestWalkDirReadsLargeVSCDBByHeader(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "state.vscdb"), big, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	srcs, _ := WalkDir(dir, nil)
+	srcs, _ := WalkDir(dir)
 	var found *Source
 	for i := range srcs {
 		if filepath.Base(srcs[i].Label) == "state.vscdb" {

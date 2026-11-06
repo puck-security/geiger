@@ -1,16 +1,17 @@
 package pipeline
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/puck-security/geiger/internal/module"
@@ -18,7 +19,12 @@ import (
 	"github.com/puck-security/geiger/internal/score"
 )
 
-const maxFileSize = 8 << 20 // 8 MB
+const (
+	maxFileSize      = 8 << 20  // cap on one blob handed to the parsers
+	largeFileWindow  = 4 << 20  // window size when scanning a file above the cap
+	largeFileOverlap = 64 << 10 // overlap between windows so a boundary secret isn't split
+	binarySniffBytes = 8 << 10  // bytes inspected to decide if a file is binary
+)
 
 // Source is one parsed input plus where it came from (for batch reporting).
 type Source struct {
@@ -26,35 +32,75 @@ type Source struct {
 	Blob  parse.Blob
 }
 
-// WalkDir returns a Source per regular file under dir, skipping the obvious
-// dependency / cache / build directories and generated noise files. IR works in
-// volume: point Geiger at a tree of leaked files and triage them all — but a
-// vendored dependency tree or a lockfile full of hashes is pure false-positive
-// fuel, so we don't descend into it. onFile, if non-nil, is called with the
-// running count of accepted files after each is added, for progress reporting.
-func WalkDir(dir string, onFile func(scanned int)) ([]Source, error) {
-	var paths []string
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
+// WalkConfig tunes a directory walk.
+type WalkConfig struct {
+	// ScanBinary includes files whose content looks binary. Off by default: a
+	// tree of executables and media is noise and slow, so binaries are scanned
+	// only when the operator asks for it. A file named directly on the command
+	// line is always read — this applies to files discovered by the walk.
+	ScanBinary bool
+}
+
+// WalkDirSeq streams a Source per regular file under dir, reading and parsing
+// each file only when the consumer pulls it. The whole tree is never held in
+// memory at once, so memory stays flat no matter how large the tree is. It
+// skips the obvious dependency / cache / build directories and generated noise
+// files (see skipDir/skipFile): a vendored dependency tree or a lockfile full
+// of hashes is pure false-positive fuel.
+//
+// A file over maxFileSize is scanned in overlapping windows, not skipped, so a
+// large log or memory dump is still covered without being read whole. A file
+// whose content looks binary is skipped unless cfg.ScanBinary is set. onFile,
+// if non-nil, is called with the running count of yielded sources.
+func WalkDirSeq(dir string, cfg WalkConfig, onFile func(n int)) iter.Seq[Source] {
+	return func(yield func(Source) bool) {
+		n := 0
+		emit := func(s Source) bool {
+			n++
+			if onFile != nil {
+				onFile(n)
+			}
+			return yield(s)
 		}
-		if d.IsDir() {
-			if skipDir(d.Name()) && path != dir {
-				// IDE dirs are noise, but the agentic config inside them is not:
-				// pull just the known MCP config before skipping the rest.
-				if ideConfigDir(d.Name()) {
-					paths = append(paths, ideConfigPaths(path)...)
+		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil // skip unreadable entries
+			}
+			if d.IsDir() {
+				if skipDir(d.Name()) && path != dir {
+					// IDE dirs are noise, but the agentic config inside them is not:
+					// pull just the known MCP config before skipping the rest.
+					if ideConfigDir(d.Name()) {
+						for _, p := range ideConfigPaths(path) {
+							if !loadFileSeq(p, cfg, emit) {
+								return filepath.SkipAll
+							}
+						}
+					}
+					return filepath.SkipDir
 				}
-				return filepath.SkipDir
+				return nil
+			}
+			if skipFile(d.Name()) {
+				return nil
+			}
+			if !loadFileSeq(path, cfg, emit) {
+				return filepath.SkipAll
 			}
 			return nil
-		}
-		if !skipFile(d.Name()) {
-			paths = append(paths, path)
-		}
-		return nil
-	})
-	return loadSources(paths, onFile), err
+		})
+	}
+}
+
+// WalkDir collects WalkDirSeq into a slice with the default config. It is a
+// convenience for tests and callers that want the whole result at once; the
+// scanning path uses WalkDirSeq so it never materializes the tree.
+func WalkDir(dir string) ([]Source, error) {
+	var out []Source
+	for s := range WalkDirSeq(dir, WalkConfig{}, nil) {
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // loadConcurrency is the worker count for reading and parsing files. The work is
@@ -79,114 +125,115 @@ func loadConcurrency(n int) int {
 
 const maxLoadWorkers = 16
 
-// loadSources reads and parses every candidate path through a worker pool.
+// loadFileSeq reads and parses one path and yields its Source(s): one for a
+// normal file, several for an archive (each member) or a large file (each
+// window). It yields nothing for a file that should be skipped. It returns the
+// consumer's verdict — false means stop the whole walk — so a caller can honor
+// an early break.
 //
-// Results keep walk order: each worker writes its own slot and the slice is
-// compacted afterwards. That ordering is load-bearing, not cosmetic — the batch
-// dedupes a secret to its FIRST sighting, so a scheduling-dependent order would
-// make which file is reported as the primary location (and which land under
-// "also exposed in") vary between runs of the same scan.
-//
-// onFile, if non-nil, is called with the running count of loaded files. It is
-// invoked from worker goroutines but serialized, so a caller may write progress
-// output from it. The count is a completion tally, so it no longer implies
-// anything about which file is being read.
-func loadSources(paths []string, onFile func(int)) []Source {
-	if len(paths) == 0 {
-		return nil
-	}
-	slots := make([][]Source, len(paths))
-	var (
-		mu     sync.Mutex
-		loaded int
-	)
-	tick := func(n int) {
-		if onFile == nil || n == 0 {
-			return
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		loaded += n
-		onFile(loaded)
-	}
-	load := func(i int) {
-		s := loadFile(paths[i])
-		slots[i] = s
-		tick(len(s))
-	}
-	if conc := loadConcurrency(len(paths)); conc <= 1 {
-		for i := range paths {
-			load(i)
-		}
-	} else {
-		jobs := make(chan int)
-		var wg sync.WaitGroup
-		for range conc {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for i := range jobs {
-					load(i)
-				}
-			}()
-		}
-		for i := range paths {
-			jobs <- i
-		}
-		close(jobs)
-		wg.Wait()
-	}
-	out := make([]Source, 0, len(paths))
-	for _, s := range slots {
-		out = append(out, s...)
-	}
-	return out
-}
-
-// loadFile reads and parses one regular file. It returns nil when the file
-// should not become a Source, and more than one Source when the file is an
-// archive — IR is routinely handed a tarball of a compromised host, so a
-// container is expanded in memory and each member triaged in its own right.
-// A file over the size cap is skipped — UNLESS it's an AI-IDE token store
-// (state.vscdb), a known high-value target identified by its SQLite header
-// without slurping the whole multi-MB binary.
-func loadFile(path string) []Source {
+// An AI-IDE token store (state.vscdb) is a known high-value target, identified
+// by its SQLite header without slurping the whole multi-MB binary. An archive is
+// read past the per-file cap and expanded, each member triaged in its own right.
+// A file over the cap is scanned in windows rather than skipped. A file whose
+// content looks binary is skipped unless cfg.ScanBinary is set.
+func loadFileSeq(path string, cfg WalkConfig, yield func(Source) bool) bool {
 	if isIDEStore(filepath.Base(path)) {
 		hdr, err := readHead(path, 64)
 		if err != nil || !strings.HasPrefix(hdr, "SQLite format 3") {
-			return nil
+			return true
 		}
-		return []Source{newSource(path, hdr, fileModTime(path))}
+		return yield(newSource(path, hdr, fileModTime(path)))
 	}
 	fi, err := os.Stat(path)
-	if err != nil {
-		return nil
+	if err != nil || !fi.Mode().IsRegular() {
+		return true // skip devices, pipes, sockets, broken symlinks
 	}
-	// An archive is read past the per-file cap: the cap bounds one blob handed to
-	// the parsers, while an archive is a container whose members are each capped
-	// separately, under an overall byte and member budget.
 	if looksLikeArchive(path) {
 		if fi.Size() > maxArchiveBytes {
-			return nil
+			return true
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil
+			return true
 		}
-		srcs := archiveSources(path, data)
-		for i := range srcs {
-			srcs[i].Blob.ModTime = fi.ModTime()
+		for _, s := range archiveSources(path, data) {
+			s.Blob.ModTime = fi.ModTime()
+			if !yield(s) {
+				return false
+			}
 		}
-		return srcs
+		return true
 	}
-	if fi.Size() > maxFileSize {
-		return nil
+	if fi.Size() <= maxFileSize {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return true
+		}
+		if !cfg.ScanBinary && looksBinary(data) {
+			return true
+		}
+		return yield(newSource(path, string(data), fi.ModTime()))
 	}
-	data, err := os.ReadFile(path)
+	return scanLargeFile(path, fi.ModTime(), cfg, yield)
+}
+
+// scanLargeFile scans a file above the per-blob cap in overlapping windows, so a
+// big log or memory dump is covered without being read whole. Only one window is
+// resident at a time. The overlap carries the tail of each window into the next
+// so a secret straddling a boundary is still matched; the duplicate hit in the
+// overlap is collapsed by the batch's secret dedupe. Structured parsing (JSON,
+// INI) is best-effort on a partial window; raw secret recognition still runs.
+func scanLargeFile(path string, mod time.Time, cfg WalkConfig, yield func(Source) bool) bool {
+	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return true
 	}
-	return []Source{newSource(path, string(data), fi.ModTime())}
+	defer f.Close()
+	var carry []byte // tail of the previous window, prepended for overlap
+	checked := false
+	for {
+		buf := make([]byte, largeFileWindow)
+		n, err := io.ReadFull(f, buf)
+		if n == 0 {
+			return true
+		}
+		chunk := buf[:n]
+		if !checked {
+			if !cfg.ScanBinary && looksBinary(chunk) {
+				return true
+			}
+			checked = true
+		}
+		window := chunk
+		if len(carry) > 0 {
+			window = make([]byte, 0, len(carry)+n)
+			window = append(window, carry...)
+			window = append(window, chunk...)
+		}
+		if !yield(newSource(path, string(window), mod)) {
+			return false
+		}
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return true // last (short) window
+		}
+		if err != nil {
+			return true
+		}
+		if len(window) > largeFileOverlap {
+			carry = append([]byte(nil), window[len(window)-largeFileOverlap:]...)
+		} else {
+			carry = append([]byte(nil), window...)
+		}
+	}
+}
+
+// looksBinary reports whether a leading sample contains a NUL byte, git's
+// heuristic for a binary file.
+func looksBinary(b []byte) bool {
+	if len(b) > binarySniffBytes {
+		b = b[:binarySniffBytes]
+	}
+	return bytes.IndexByte(b, 0) >= 0
 }
 
 func newSource(path, raw string, mod time.Time) Source {
