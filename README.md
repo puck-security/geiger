@@ -339,7 +339,7 @@ key that runs code, wipes devices, restores backups, or reads *other* secrets is
 a force multiplier; a billed-usage API key is a warning.
 
 <details>
-<summary><b>Full coverage — 178 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
+<summary><b>Full coverage — 181 credential types</b> (regenerate with <code>go run ./tools/coverage</code>)</summary>
 
 **Cloud & hosting**
 
@@ -404,7 +404,7 @@ a force multiplier; a billed-usage API key is a warning.
 | Credential / app | Reach |
 |---|---|
 | `db_connection_string` | direct DB data-plane (pg/mysql/mongo/redis/mssql/oracle/clickhouse/cassandra/sqlite) |
-| `snowflake` | Snowflake — data-warehouse access (account-wide at ACCOUNTADMIN) |
+| `snowflake` | Snowflake — data-warehouse access |
 | `databricks` | Databricks — workspace, jobs, notebooks, data |
 | `mongodb_atlas` | MongoDB Atlas service account — Admin API access to orgs/projects/clusters |
 | `supabase` | Supabase service_role — RLS-bypass full DB + auth admin |
@@ -485,6 +485,7 @@ a force multiplier; a billed-usage API key is a warning.
 |---|---|
 | `ninjaone` | NinjaOne RMM — script execution + remote control across endpoints |
 | `atera` | Atera RMM/PSA — full agent & customer inventory |
+| `nizlo` | Nizlo RMM — tenant-scoped personal token; reach follows its explicit permissions and the technician's current role |
 | `kandji` | Kandji MDM — device inventory + remote lock/erase |
 | `jamf` | Jamf Pro — script execution + MDM lock/wipe |
 | `mosyle` | Mosyle MDM — device control incl. remote wipe/lock |
@@ -594,6 +595,14 @@ a force multiplier; a billed-usage API key is a warning.
 | `jwt` | decoded offline — no network call made; map issuer to its provider for live recon |
 | `generic_secret` | unrecognized credential (matched by name) |
 | `needs_endpoint` | recognized — provide --endpoint to characterize |
+
+**Uncategorized (add to a group in tools/coverage)**
+
+| Credential / app | Reach |
+|---|---|
+| `gpp_cpassword` | GPP cpassword (undecryptable) |
+
+_181 credential types_
 
 </details>
 

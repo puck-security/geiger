@@ -51,7 +51,7 @@ var groups = []struct {
 		"okta", "pingone", "pingfederate", "entra_sp", "jumpcloud", "sailpoint", "auth0", "duo", "workday", "workos",
 	}},
 	{"Endpoint, MDM, RMM & config-mgmt", []string{
-		"ninjaone", "atera", "kandji", "jamf", "mosyle", "automox", "tanium", "ansible_awx",
+		"ninjaone", "atera", "nizlo", "kandji", "jamf", "mosyle", "automox", "tanium", "ansible_awx",
 		"puppet_enterprise", "saltstack", "fleet",
 	}},
 	{"Monitoring & observability", []string{
